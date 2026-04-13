@@ -8,6 +8,7 @@ from aiohttp import web
 
 from bot.config import EnvironmentConfig
 from bot.tracker import TradeTracker
+from models import BotState
 
 
 def create_web_app(*, env: EnvironmentConfig, tracker: TradeTracker) -> web.Application:
@@ -87,7 +88,7 @@ def _build_status_payload(tracker: TradeTracker) -> dict[str, Any]:
         accent="#7aa7ff",
     )
     return {
-        "profiles": [_serialize_profile_status(item) for item in profiles],
+        "profiles": [_serialize_profile_status(tracker, item) for item in profiles],
         "profile_performance": profile_performance,
         "recent_trades": [_serialize_trade(trade) for trade in recent_trades],
         "open_positions": [_serialize_position(position) for position in open_positions],
@@ -97,16 +98,18 @@ def _build_status_payload(tracker: TradeTracker) -> dict[str, Any]:
     }
 
 
-def _serialize_profile_status(profile: dict[str, Any]) -> dict[str, Any]:
+def _serialize_profile_status(tracker: TradeTracker, profile: dict[str, Any]) -> dict[str, Any]:
     strategy_name = str(profile.get("strategy_name") or "unassigned")
+    latest_state = tracker.get_latest_state(strategy_name=strategy_name)
     return {
         "profile_name": strategy_name,
+        "latest_state": None if latest_state is None else _serialize_state(latest_state),
         "trade_count": int(profile.get("trade_count") or 0),
         "open_orders": int(profile.get("open_orders") or 0),
         "open_positions": int(profile.get("open_positions") or 0),
         "win_rate": profile.get("win_rate"),
         "total_pnl": float(profile.get("total_pnl") or 0.0),
-        "equity_curve_svg": _serialize_profile_curve(strategy_name, profile),
+        "equity_curve_svg": _serialize_profile_curve(strategy_name, profile, latest_state),
     }
 
 
@@ -489,12 +492,15 @@ def _state_badge(value: str, *, accent: str = "primary") -> str:
     return f"<span class='badge badge--{escape(accent)} badge--{escape(normalized.lower())}'>{escape(normalized)}</span>"
 
 
-def _serialize_profile_curve(strategy_name: str, profile: dict[str, Any]) -> str:
+def _serialize_profile_curve(strategy_name: str, profile: dict[str, Any], latest_state: BotState | None) -> str:
     if not profile:
         return "<div class='card-chart empty'>No profile data yet</div>"
     # The dashboard does not have direct per-profile trade history from the summarized
-    # performance table, so we render a compact glyph based on the aggregate profile state.
+    # performance table, so we render a compact glyph based on the aggregate profile state
+    # plus the latest per-profile bankroll snapshot.
+    bankroll = float(latest_state.bankroll) if latest_state is not None else 0.0
     values = [
+        bankroll,
         float(profile["trade_count"] or 0),
         float(profile["open_positions"] or 0),
         float(profile["open_orders"] or 0),
