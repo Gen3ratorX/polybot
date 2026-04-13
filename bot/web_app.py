@@ -98,10 +98,16 @@ def _build_status_payload(service: ControlService, tracker: TradeTracker) -> dic
     global_control = service.get_global_status()
     profiles = [service.get_profile_status(profile) for profile in service.list_profiles()]
     profile_performance = tracker.profile_performance_report()
-    recent_trades = tracker.list_recent_trades(limit=10)
-    open_positions = tracker.list_open_positions(limit=10)
-    open_orders = tracker.list_open_orders(limit=10)
+    recent_trades = tracker.list_recent_trades(limit=20)
+    open_positions = tracker.list_open_positions(limit=20)
+    open_orders = tracker.list_open_orders(limit=20)
     latest_state = tracker.get_latest_state()
+    global_curve_svg = _render_curve_svg(
+        _cumulative_pnl_points(recent_trades),
+        title="Recent Equity Curve",
+        subtitle="Resolved trades from the latest ledger sample.",
+        accent="#7aa7ff",
+    )
     return {
         "global_control": global_control,
         "profiles": [_serialize_profile_status(item) for item in profiles],
@@ -110,14 +116,24 @@ def _build_status_payload(service: ControlService, tracker: TradeTracker) -> dic
         "open_positions": [_serialize_position(position) for position in open_positions],
         "open_orders": [_serialize_order(order) for order in open_orders],
         "latest_state": None if latest_state is None else _serialize_state(latest_state),
+        "global_curve_svg": global_curve_svg,
     }
 
 
 def _serialize_profile_status(profile: dict[str, Any]) -> dict[str, Any]:
     latest_state = profile.get("latest_state")
+    equity_curve_svg = None
+    if latest_state is not None and getattr(latest_state, "recent_trades", None):
+        equity_curve_svg = _render_curve_svg(
+            _cumulative_pnl_points(list(latest_state.recent_trades)),
+            title=f"{profile['profile_name']} Equity Curve",
+            subtitle="Resolved trade PnL from recent profile history.",
+            accent="#63e6be" if profile.get("profile_state") != "STOPPED" else "#ffcd70",
+        )
     return {
         **profile,
         "latest_state": None if latest_state is None else _serialize_state(latest_state),
+        "equity_curve_svg": equity_curve_svg,
     }
 
 
@@ -166,6 +182,7 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
     open_positions = payload["open_positions"]
     open_orders = payload["open_orders"]
     latest_state = payload["latest_state"]
+    global_curve_svg = payload.get("global_curve_svg")
     parts = [
         "<!doctype html>",
         "<html lang='en'>",
@@ -216,6 +233,15 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "</div>",
         "</div>",
         "</header>",
+        "<section class='chart-row'>",
+        "<div class='section-head'>",
+        "<div>",
+        "<h2>Market Tape</h2>",
+        "<p>Live equity and execution quality, rendered from the ledger.</p>",
+        "</div>",
+        "</div>",
+        f"<div class='chart-frame'>{global_curve_svg}</div>" if global_curve_svg else "<div class='chart-frame empty'>No chart data yet</div>",
+        "</section>",
         "<section class='controls'>",
         "<div class='section-head'>",
         "<div>",
@@ -428,17 +454,86 @@ def _serialize_datetime(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat()
 
 
+def _cumulative_pnl_points(trades: list[Any] | tuple[Any, ...]) -> list[float]:
+    cumulative = 0.0
+    points: list[float] = []
+    for trade in trades:
+        pnl = getattr(trade, "pnl", None)
+        if pnl is None:
+            continue
+        cumulative += float(pnl)
+        points.append(round(cumulative, 6))
+    if not points:
+        return [0.0, 0.0]
+    if len(points) == 1:
+        points = [0.0, points[0]]
+    return points
+
+
+def _render_curve_svg(
+    values: list[float],
+    *,
+    title: str,
+    subtitle: str,
+    accent: str,
+) -> str:
+    width = 880
+    height = 220
+    padding_x = 26
+    padding_y = 24
+    plot_width = width - (padding_x * 2)
+    plot_height = height - (padding_y * 2)
+    minimum = min(values)
+    maximum = max(values)
+    if abs(maximum - minimum) < 1e-9:
+        maximum = minimum + 1.0
+    points: list[str] = []
+    for index, value in enumerate(values):
+        x = padding_x + (plot_width * (index / max(1, len(values) - 1)))
+        y_ratio = (value - minimum) / (maximum - minimum)
+        y = padding_y + plot_height - (plot_height * y_ratio)
+        points.append(f"{x:.1f},{y:.1f}")
+    path = " ".join(points)
+    chart_id = f"grad-{abs(hash(title)) % 100000}"
+    min_label = f"${minimum:+.2f}"
+    max_label = f"${maximum:+.2f}"
+    current_label = f"${values[-1]:+.2f}"
+    return (
+        f"<svg viewBox='0 0 880 220' role='img' aria-label='{escape(title)}' class='curve-svg'>"
+        "<defs>"
+        f"<linearGradient id='{chart_id}' x1='0' x2='0' y1='0' y2='1'>"
+        f"<stop offset='0%' stop-color='{escape(accent)}' stop-opacity='0.92'/>"
+        f"<stop offset='100%' stop-color='{escape(accent)}' stop-opacity='0.05'/>"
+        f"</linearGradient>"
+        "</defs>"
+        f"<rect x='0' y='0' width='880' height='220' rx='18' fill='rgba(255,255,255,0.02)' stroke='rgba(255,255,255,0.07)'/>"
+        f"<text x='24' y='34' class='chart-title'>{escape(title)}</text>"
+        f"<text x='24' y='56' class='chart-subtitle'>{escape(subtitle)}</text>"
+        f"<text x='836' y='34' text-anchor='end' class='chart-pill'>{escape(current_label)}</text>"
+        "<line x1='24' y1='180' x2='856' y2='180' stroke='rgba(255,255,255,0.08)'/>"
+        "<line x1='24' y1='128' x2='856' y2='128' stroke='rgba(255,255,255,0.05)'/>"
+        "<line x1='24' y1='76' x2='856' y2='76' stroke='rgba(255,255,255,0.05)'/>"
+        f"<path d='M {path}' fill='none' stroke='{escape(accent)}' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/>"
+        f"<path d='M 26,180 {path} 854,180 Z' fill='url(#{chart_id})' opacity='0.9'/>"
+        f"<text x='24' y='198' class='chart-axis'>{escape(min_label)}</text>"
+        f"<text x='836' y='198' text-anchor='end' class='chart-axis'>{escape(max_label)}</text>"
+        "</svg>"
+    )
+
+
 def _profile_card_html(profile: dict[str, Any]) -> list[str]:
     profile_name = profile["profile_name"]
     effective = str(profile["effective_state"])
     profile_state = str(profile["profile_state"])
     global_state = str(profile["global_state"])
+    equity_curve_svg = profile.get("equity_curve_svg")
     return [
         "<article class='card'>",
         "<div class='card-head'>",
         f"<div class='card-title'>{escape(str(profile_name))}</div>",
         f"<div class='card-badges'>{_state_badge(effective)} {_state_badge(profile_state, accent='secondary')} {_state_badge(global_state, accent='muted')}</div>",
         "</div>",
+        f"<div class='card-chart'>{equity_curve_svg}</div>" if equity_curve_svg else "<div class='card-chart empty'>No equity curve yet</div>",
         "<div class='card-grid'>",
         _stat_cell("Effective", effective),
         _stat_cell("Profile", profile_state),
@@ -682,6 +777,50 @@ def _style_block() -> str:
         gap: 10px;
         margin-top: 16px;
       }
+      .chart-row {
+        margin-bottom: 24px;
+      }
+      .chart-frame {
+        padding: 16px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02));
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(14px);
+      }
+      .card-chart {
+        padding: 12px;
+        margin-bottom: 14px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.018));
+        border: 1px solid rgba(255,255,255,0.06);
+      }
+      .chart-frame.empty, .card-chart.empty {
+        min-height: 220px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+      }
+      .curve-svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .chart-title {
+        fill: var(--text);
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .chart-subtitle, .chart-axis {
+        fill: var(--muted);
+        font-size: 12px;
+      }
+      .chart-pill {
+        fill: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
       .hero-card, .card, table, .control-row {
         background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02));
         border: 1px solid var(--border);
@@ -798,6 +937,7 @@ def _style_block() -> str:
         .card-grid { grid-template-columns: 1fr; }
         .topbar { flex-direction: column; align-items: flex-start; }
         .topbar-meta { width: 100%; }
+        .chart-frame { padding: 12px; }
       }
     </style>
     """
