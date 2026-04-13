@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from bot.config import load_environment, load_runtime_config
 from bot.runtime_state import send_optional_alert, sync_live_state
 from bot.tracker import TradeTracker
@@ -63,3 +67,32 @@ def test_send_optional_alert_suppresses_exact_duplicates(monkeypatch) -> None:
     assert first.status == 200
     assert second.status == 208
     assert deliveries == [("INFO", "hello")]
+
+
+@pytest.mark.asyncio
+async def test_send_optional_alert_works_inside_running_loop(monkeypatch) -> None:
+    deliveries = []
+
+    class FakeAlerter:
+        def __init__(self, token, chat_id):
+            self.token = token
+            self.chat_id = chat_id
+
+        async def send_alert(self, message, level="INFO"):
+            deliveries.append((level, message))
+            return type("Delivery", (), {"ok": True, "status": 200, "response": {"ok": True}})()
+
+    env = type(
+        "Env",
+        (),
+        {"telegram_token": "token", "telegram_chat_id": "chat"},
+    )()
+
+    monkeypatch.setattr("bot.runtime_state.TelegramAlerter", FakeAlerter)
+    monkeypatch.setattr("bot.runtime_state._RECENT_ALERTS", {})
+
+    result = send_optional_alert(env, "hello from loop", level="INFO")
+
+    assert result is not None
+    assert result.status == 200
+    assert deliveries == [("INFO", "hello from loop")]

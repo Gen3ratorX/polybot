@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from threading import Thread
 from dataclasses import dataclass
 
 from api.clob import get_collateral_status
@@ -79,4 +80,29 @@ def send_optional_alert(
     for key in stale:
         _RECENT_ALERTS.pop(key, None)
     alerter = TelegramAlerter(env.telegram_token, env.telegram_chat_id)
-    return asyncio.run(alerter.send_alert(message, level=level))
+    return _run_alert_coroutine(alerter.send_alert(message, level=level))
+
+
+def _run_alert_coroutine(alert_coroutine):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(alert_coroutine)
+
+    result: list[AlertDelivery] = []
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        try:
+            result.append(asyncio.run(alert_coroutine))
+        except BaseException as exc:  # pragma: no cover - defensive propagation
+            error.append(exc)
+
+    thread = Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    if not result:
+        raise RuntimeError("alert delivery did not complete")
+    return result[0]

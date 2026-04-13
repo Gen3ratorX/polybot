@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: polybot:latest
     container_name: polybot
+    pull_policy: never
     restart: unless-stopped
     init: true
     environment:
