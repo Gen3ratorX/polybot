@@ -451,9 +451,6 @@ def _render_curve_svg(
 
 def _profile_card_html(profile: dict[str, Any]) -> list[str]:
     profile_name = profile["profile_name"]
-    effective = str(profile["effective_state"])
-    profile_state = str(profile["profile_state"])
-    global_state = str(profile["global_state"])
     equity_curve_svg = profile.get("equity_curve_svg")
     return [
         "<article class='card'>",
