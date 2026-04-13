@@ -57,7 +57,7 @@ services:
       DATABASE_URL: sqlite:////data/bot.db
       PYTHONUNBUFFERED: "1"
     ports:
-      - "8080:8080"
+      - "5999:8080"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro
