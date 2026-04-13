@@ -104,6 +104,7 @@ def _serialize_profile_status(tracker: TradeTracker, profile: dict[str, Any]) ->
     return {
         "profile_name": strategy_name,
         "latest_state": None if latest_state is None else _serialize_state(latest_state),
+        "bankroll": 0.0 if latest_state is None else float(latest_state.bankroll),
         "trade_count": int(profile.get("trade_count") or 0),
         "open_orders": int(profile.get("open_orders") or 0),
         "open_positions": int(profile.get("open_positions") or 0),
