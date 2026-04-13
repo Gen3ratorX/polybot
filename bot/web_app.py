@@ -178,26 +178,63 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "</head>",
         "<body>",
         "<main class='shell'>",
+        "<header class='topbar'>",
+        "<div class='brand-lockup'>",
+        "<div class='brand-mark'>P</div>",
+        "<div>",
+        "<p class='eyebrow'>Polybot Control Plane</p>",
+        "<div class='brand-row'>",
+        "<h1>Dashboard</h1>",
+        "<span class='live-pill'>LIVE</span>",
+        "</div>",
+        "</div>",
+        "</div>",
+        "<div class='topbar-meta'>",
+        "<div class='topbar-item'><span>Global</span><strong>{}</strong></div>".format(escape(str(global_control["desired_state"]))),
+        "<div class='topbar-item'><span>Run-once queue</span><strong>{}</strong></div>".format(global_control["run_once_pending"]),
+        "</div>",
+        "</header>",
         "<header class='hero'>",
         "<div>",
-        "<p class='eyebrow'>Polybot Control</p>",
-        "<h1>Live trading control and monitoring</h1>",
-        "<p class='lede'>Monitor the daemon, profiles, and control plane from one place.</p>",
+        "<p class='lede'>Monitor the daemon, profiles, and control plane from one place. Everything is read from the live SQLite ledger and rendered with the current control state.</p>",
+        "<div class='hero-chips'>",
+        _chip(f"Bankroll ${float(latest_state['bankroll']):.2f}" if latest_state else "Bankroll n/a"),
+        _chip(f"Trades {sum(item['trade_count'] for item in performance)}"),
+        _chip(f"Open positions {sum(item['open_positions'] for item in performance)}"),
+        _chip(f"Open orders {sum(item['open_orders'] for item in performance)}"),
         "</div>",
-        "<div class='hero-card'>",
-        f"<div class='metric-label'>Global state</div><div class='metric-value'>{escape(str(global_control['desired_state']))}</div>",
+        "</div>",
+        "<div class='hero-card hero-card--status'>",
+        "<div class='metric-label'>System state</div>",
+        f"<div class='metric-value'>{escape(str(global_control['desired_state']))}</div>",
         f"<div class='metric-sub'>Run-once queue: {global_control['run_once_pending']}</div>",
+        "<div class='status-grid'>",
+        f"<div><span>Profiles</span><strong>{len(profiles)}</strong></div>",
+        f"<div><span>Open positions</span><strong>{sum(item['open_positions'] for item in performance)}</strong></div>",
+        f"<div><span>Open orders</span><strong>{sum(item['open_orders'] for item in performance)}</strong></div>",
+        f"<div><span>Resolved trades</span><strong>{sum(item['trade_count'] for item in performance)}</strong></div>",
+        "</div>",
         "</div>",
         "</header>",
         "<section class='controls'>",
-        "<div class='section-head'><h2>Global Controls</h2></div>",
+        "<div class='section-head'>",
+        "<div>",
+        "<h2>Global Controls</h2>",
+        "<p>Apply a command to both strategies at once.</p>",
+        "</div>",
+        "</div>",
         _control_row_html(command="status", profile_name=None, label="Refresh"),
         _control_row_html(command="pause", profile_name=None, label="Pause All"),
         _control_row_html(command="resume", profile_name=None, label="Resume All"),
         _control_row_html(command="stop_all", profile_name=None, label="Stop All"),
         "</section>",
         "<section class='profiles'>",
-        "<div class='section-head'><h2>Profiles</h2></div>",
+        "<div class='section-head'>",
+        "<div>",
+        "<h2>Profiles</h2>",
+        "<p>Profile-level control with separate accounting and live state.</p>",
+        "</div>",
+        "</div>",
         "<div class='profile-grid'>",
     ]
     for profile in profiles:
@@ -207,7 +244,12 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
             "</div>",
             "</section>",
             "<section class='tables'>",
-            "<div class='section-head'><h2>Profile Performance</h2></div>",
+            "<div class='section-head'>",
+            "<div>",
+            "<h2>Profile Performance</h2>",
+            "<p>Performance is split per strategy so one profile cannot hide the other.</p>",
+            "</div>",
+            "</div>",
             _table_html(
                 headers=("Profile", "Trades", "Open Orders", "Open Positions", "Win Rate", "PnL"),
                 rows=[
@@ -222,7 +264,12 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
                     for item in performance
                 ],
             ),
-            "<div class='section-head'><h2>Latest State</h2></div>",
+            "<div class='section-head'>",
+            "<div>",
+            "<h2>Latest State</h2>",
+            "<p>Snapshot from the most recent ledger state.</p>",
+            "</div>",
+            "</div>",
             _table_html(
                 headers=("Field", "Value"),
                 rows=[] if latest_state is None else [
@@ -383,13 +430,19 @@ def _serialize_datetime(value: datetime | None) -> str | None:
 
 def _profile_card_html(profile: dict[str, Any]) -> list[str]:
     profile_name = profile["profile_name"]
+    effective = str(profile["effective_state"])
+    profile_state = str(profile["profile_state"])
+    global_state = str(profile["global_state"])
     return [
         "<article class='card'>",
+        "<div class='card-head'>",
         f"<div class='card-title'>{escape(str(profile_name))}</div>",
+        f"<div class='card-badges'>{_state_badge(effective)} {_state_badge(profile_state, accent='secondary')} {_state_badge(global_state, accent='muted')}</div>",
+        "</div>",
         "<div class='card-grid'>",
-        _stat_cell("Effective", profile["effective_state"]),
-        _stat_cell("Profile", profile["profile_state"]),
-        _stat_cell("Global", profile["global_state"]),
+        _stat_cell("Effective", effective),
+        _stat_cell("Profile", profile_state),
+        _stat_cell("Global", global_state),
         _stat_cell("Run once", profile["run_once_pending"]),
         _stat_cell("Bankroll", f"${float(profile['bankroll']):.2f}"),
         _stat_cell("Open orders", profile["open_orders"]),
@@ -440,6 +493,15 @@ def _stat_cell(label: str, value: Any) -> str:
     )
 
 
+def _chip(text: str) -> str:
+    return f"<span class='chip'>{escape(text)}</span>"
+
+
+def _state_badge(value: str, *, accent: str = "primary") -> str:
+    normalized = value.strip().upper()
+    return f"<span class='badge badge--{escape(accent)} badge--{escape(normalized.lower())}'>{escape(normalized)}</span>"
+
+
 def _table_html(*, headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
     cells = ["<table>", "<thead><tr>"]
     for header in headers:
@@ -462,59 +524,212 @@ def _style_block() -> str:
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b1020;
-        --panel: #121a2d;
-        --panel-2: #16213a;
+        --bg: #08111f;
+        --panel: rgba(12, 18, 33, 0.8);
+        --panel-2: rgba(18, 25, 43, 0.8);
         --border: rgba(255,255,255,0.08);
-        --text: #e8ecf5;
-        --muted: #96a3bd;
-        --accent: #55d6be;
-        --accent-2: #75a7ff;
+        --border-strong: rgba(255,255,255,0.12);
+        --text: #edf2ff;
+        --muted: #9aabc7;
+        --accent: #63e6be;
+        --accent-2: #7aa7ff;
         --danger: #ff6b6b;
+        --warning: #ffcd70;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
       }
       * { box-sizing: border-box; }
+      html {
+        scroll-behavior: smooth;
+      }
       body {
         margin: 0;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
         background:
-          radial-gradient(circle at top left, rgba(85,214,190,0.14), transparent 28%),
-          radial-gradient(circle at top right, rgba(117,167,255,0.12), transparent 24%),
+          radial-gradient(circle at top left, rgba(99,230,190,0.14), transparent 25%),
+          radial-gradient(circle at top right, rgba(122,167,255,0.12), transparent 22%),
+          radial-gradient(circle at bottom center, rgba(255,255,255,0.05), transparent 35%),
           var(--bg);
         color: var(--text);
+        min-height: 100vh;
       }
       .shell {
-        max-width: 1440px;
+        max-width: 1500px;
         margin: 0 auto;
-        padding: 32px 24px 48px;
+        padding: 28px 24px 56px;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 18px 20px;
+        margin-bottom: 18px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+      }
+      .brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .brand-mark {
+        width: 48px;
+        height: 48px;
+        display: grid;
+        place-items: center;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(99,230,190,0.9), rgba(122,167,255,0.85));
+        color: #04111f;
+        font-weight: 900;
+        font-size: 1.1rem;
+        box-shadow: 0 10px 30px rgba(99,230,190,0.2);
+      }
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .brand-row h1 {
+        margin: 0;
+        font-size: 1.7rem;
+        line-height: 1;
+      }
+      .topbar-meta {
+        display: flex;
+        align-items: stretch;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .topbar-item {
+        min-width: 132px;
+        padding: 10px 14px;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .topbar-item span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin-bottom: 4px;
+      }
+      .topbar-item strong {
+        font-size: 1.02rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .live-pill, .badge, .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .live-pill {
+        padding: 7px 12px;
+        background: rgba(99,230,190,0.12);
+        color: var(--accent);
+        border: 1px solid rgba(99,230,190,0.24);
+      }
+      .badge {
+        padding: 5px 10px;
+        border: 1px solid transparent;
+      }
+      .badge--primary {
+        background: rgba(122,167,255,0.12);
+        color: #bfd0ff;
+        border-color: rgba(122,167,255,0.2);
+      }
+      .badge--secondary {
+        background: rgba(99,230,190,0.1);
+        color: #bdf6e8;
+        border-color: rgba(99,230,190,0.18);
+      }
+      .badge--muted {
+        background: rgba(255,255,255,0.05);
+        color: var(--muted);
+        border-color: rgba(255,255,255,0.08);
+      }
+      .badge--running { background: rgba(99,230,190,0.12); color: var(--accent); }
+      .badge--paused { background: rgba(255,205,112,0.12); color: var(--warning); }
+      .badge--stopped { background: rgba(255,107,107,0.12); color: var(--danger); }
+      .chip {
+        padding: 8px 12px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.06);
+        color: var(--text);
       }
       .hero {
         display: grid;
-        grid-template-columns: 1.5fr 0.7fr;
+        grid-template-columns: 1.4fr 0.82fr;
         gap: 20px;
         align-items: stretch;
         margin-bottom: 24px;
       }
-      .hero h1 { margin: 4px 0 10px; font-size: clamp(2rem, 3vw, 3.5rem); line-height: 1.02; }
-      .eyebrow { margin: 0; text-transform: uppercase; letter-spacing: 0.18em; color: var(--accent); font-size: 0.75rem; }
-      .lede { margin: 0; color: var(--muted); max-width: 62ch; }
+      .hero h1 { margin: 0; font-size: clamp(2.2rem, 4vw, 4rem); line-height: 0.96; }
+      .eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--accent); font-size: 0.75rem; }
+      .lede { margin: 0; color: var(--muted); max-width: 62ch; font-size: 1.02rem; line-height: 1.6; }
+      .hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
       .hero-card, .card, table, .control-row {
-        background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.018));
+        background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02));
         border: 1px solid var(--border);
         border-radius: 18px;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(14px);
       }
       .hero-card {
         padding: 22px;
         display: flex;
         flex-direction: column;
         justify-content: center;
-        min-height: 160px;
+        min-height: 220px;
       }
       .metric-label, .stat-label { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.12em; }
-      .metric-value { font-size: 2.2rem; font-weight: 700; margin: 6px 0; }
+      .metric-value { font-size: 2.5rem; font-weight: 800; margin: 8px 0 4px; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
       .metric-sub { color: var(--muted); }
-      .section-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .status-grid div {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .status-grid span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin-bottom: 6px;
+      }
+      .status-grid strong {
+        font-size: 1.08rem;
+      }
+      .section-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        margin: 18px 0 12px;
+      }
       .section-head h2 { margin: 0; font-size: 1.2rem; }
+      .section-head p { margin: 6px 0 0; color: var(--muted); }
       .controls, .profiles, .tables { margin-bottom: 28px; }
       .control-row {
         display: inline-flex;
@@ -531,11 +746,19 @@ def _style_block() -> str:
       }
       .profile-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
         gap: 18px;
       }
       .card { padding: 18px; }
-      .card-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 14px; }
+      .card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .card-title { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.02em; }
+      .card-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
       .card-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -545,10 +768,10 @@ def _style_block() -> str:
       .stat {
         padding: 12px;
         border-radius: 14px;
-        background: rgba(255,255,255,0.025);
-        border: 1px solid rgba(255,255,255,0.04);
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.05);
       }
-      .stat-value { margin-top: 4px; font-size: 1rem; font-weight: 600; word-break: break-word; }
+      .stat-value { margin-top: 4px; font-size: 1rem; font-weight: 700; word-break: break-word; font-variant-numeric: tabular-nums; }
       .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
       .inline-form, .button-row form { margin: 0; }
       table { width: 100%; border-collapse: collapse; overflow: hidden; }
@@ -556,9 +779,25 @@ def _style_block() -> str:
       th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.12em; }
       .muted { color: var(--muted); }
       .profile-grid .card:last-child { margin-bottom: 0; }
+      .controls .control-row button,
+      .inline-form button {
+        transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+      }
+      .controls .control-row button:hover,
+      .inline-form button:hover {
+        transform: translateY(-1px);
+        background: rgba(255,255,255,0.04);
+      }
+      .controls .control-row button:active,
+      .inline-form button:active {
+        transform: translateY(0);
+        opacity: 0.9;
+      }
       @media (max-width: 900px) {
         .hero { grid-template-columns: 1fr; }
         .card-grid { grid-template-columns: 1fr; }
+        .topbar { flex-direction: column; align-items: flex-start; }
+        .topbar-meta { width: 100%; }
       }
     </style>
     """
