@@ -7,24 +7,19 @@ from typing import Any
 from aiohttp import web
 
 from bot.config import EnvironmentConfig
-from bot.control_service import ControlService
 from bot.tracker import TradeTracker
 
 
 def create_web_app(*, env: EnvironmentConfig, tracker: TradeTracker) -> web.Application:
     app = web.Application(middlewares=[_auth_middleware])
-    service = ControlService(tracker, env.database_url)
     app["env"] = env
     app["tracker"] = tracker
-    app["service"] = service
 
     app.add_routes(
         [
             web.get("/", _handle_index),
             web.get("/healthz", _handle_health),
             web.get("/api/status", _handle_status_api),
-            web.post("/api/control", _handle_control_api),
-            web.post("/control", _handle_control_form),
         ]
     )
     return app
@@ -66,37 +61,20 @@ async def _handle_health(request: web.Request) -> web.Response:
 
 
 async def _handle_status_api(request: web.Request) -> web.Response:
-    service: ControlService = request.app["service"]
     tracker: TradeTracker = request.app["tracker"]
-    payload = _build_status_payload(service, tracker)
+    payload = _build_status_payload(tracker)
     return web.json_response(payload)
 
 
-async def _handle_control_api(request: web.Request) -> web.Response:
-    service: ControlService = request.app["service"]
-    payload = await _read_json_or_form(request)
-    result = _apply_control(service, payload)
-    return web.json_response(result)
-
-
-async def _handle_control_form(request: web.Request) -> web.Response:
-    service: ControlService = request.app["service"]
-    payload = await _read_json_or_form(request)
-    _apply_control(service, payload)
-    raise web.HTTPSeeOther("/")
-
-
 async def _handle_index(request: web.Request) -> web.Response:
-    service: ControlService = request.app["service"]
     tracker: TradeTracker = request.app["tracker"]
-    payload = _build_status_payload(service, tracker)
+    payload = _build_status_payload(tracker)
     html = _render_dashboard_html(payload)
     return web.Response(text=html, content_type="text/html")
 
 
-def _build_status_payload(service: ControlService, tracker: TradeTracker) -> dict[str, Any]:
-    global_control = service.get_global_status()
-    profiles = [service.get_profile_status(profile) for profile in service.list_profiles()]
+def _build_status_payload(tracker: TradeTracker) -> dict[str, Any]:
+    profiles = tracker.profile_performance_report()
     profile_performance = tracker.profile_performance_report()
     recent_trades = tracker.list_recent_trades(limit=20)
     open_positions = tracker.list_open_positions(limit=20)
@@ -109,7 +87,6 @@ def _build_status_payload(service: ControlService, tracker: TradeTracker) -> dic
         accent="#7aa7ff",
     )
     return {
-        "global_control": global_control,
         "profiles": [_serialize_profile_status(item) for item in profiles],
         "profile_performance": profile_performance,
         "recent_trades": [_serialize_trade(trade) for trade in recent_trades],
@@ -121,61 +98,19 @@ def _build_status_payload(service: ControlService, tracker: TradeTracker) -> dic
 
 
 def _serialize_profile_status(profile: dict[str, Any]) -> dict[str, Any]:
-    latest_state = profile.get("latest_state")
-    equity_curve_svg = None
-    if latest_state is not None and getattr(latest_state, "recent_trades", None):
-        equity_curve_svg = _render_curve_svg(
-            _cumulative_pnl_points(list(latest_state.recent_trades)),
-            title=f"{profile['profile_name']} Equity Curve",
-            subtitle="Resolved trade PnL from recent profile history.",
-            accent="#63e6be" if profile.get("profile_state") != "STOPPED" else "#ffcd70",
-        )
+    strategy_name = str(profile.get("strategy_name") or "unassigned")
     return {
-        **profile,
-        "latest_state": None if latest_state is None else _serialize_state(latest_state),
-        "equity_curve_svg": equity_curve_svg,
+        "profile_name": strategy_name,
+        "trade_count": int(profile.get("trade_count") or 0),
+        "open_orders": int(profile.get("open_orders") or 0),
+        "open_positions": int(profile.get("open_positions") or 0),
+        "win_rate": profile.get("win_rate"),
+        "total_pnl": float(profile.get("total_pnl") or 0.0),
+        "equity_curve_svg": _serialize_profile_curve(strategy_name, profile),
     }
-
-
-def _apply_control(service: ControlService, payload: dict[str, Any]) -> dict[str, Any]:
-    command = str(payload.get("command", "")).strip().lower()
-    profile_name = payload.get("profile_name")
-    profile_name = None if profile_name in (None, "", "global") else str(profile_name)
-    actor = str(payload.get("actor") or "web")
-    if profile_name is None:
-        result = service.apply_global_command(
-            command,
-            actor=actor,
-            notes="Web control",
-        )
-    else:
-        result = service.apply_profile_command(
-            command,
-            profile_name,
-            actor=actor,
-            notes="Web control",
-        )
-    return {
-        "handled": result.handled,
-        "command": result.command,
-        "scope": result.scope,
-        "profile_name": result.profile_name,
-        "response": result.response,
-    }
-
-
-async def _read_json_or_form(request: web.Request) -> dict[str, Any]:
-    if request.content_type.startswith("application/json"):
-        data = await request.json()
-        if isinstance(data, dict):
-            return data
-        return {}
-    data = await request.post()
-    return dict(data)
 
 
 def _render_dashboard_html(payload: dict[str, Any]) -> str:
-    global_control = payload["global_control"]
     profiles = payload["profiles"]
     performance = payload["profile_performance"]
     recent_trades = payload["recent_trades"]
@@ -199,21 +134,23 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "<div class='brand-lockup'>",
         "<div class='brand-mark'>P</div>",
         "<div>",
-        "<p class='eyebrow'>Polybot Control Plane</p>",
+        "<p class='eyebrow'>Polybot Observatory</p>",
         "<div class='brand-row'>",
-        "<h1>Dashboard</h1>",
+        "<h1>Quantum Desk</h1>",
         "<span class='live-pill'>LIVE</span>",
         "</div>",
+        "<p class='topbar-copy'>Read-only portfolio observability. Status, execution, and performance are rendered from the live ledger.</p>",
         "</div>",
         "</div>",
         "<div class='topbar-meta'>",
-        "<div class='topbar-item'><span>Global</span><strong>{}</strong></div>".format(escape(str(global_control["desired_state"]))),
-        "<div class='topbar-item'><span>Run-once queue</span><strong>{}</strong></div>".format(global_control["run_once_pending"]),
+        f"<div class='topbar-item'><span>Profiles</span><strong>{len(profiles)}</strong></div>",
+        f"<div class='topbar-item'><span>Trades</span><strong>{sum(item['trade_count'] for item in performance)}</strong></div>",
+        f"<div class='topbar-item'><span>Open positions</span><strong>{sum(item['open_positions'] for item in performance)}</strong></div>",
         "</div>",
         "</header>",
         "<header class='hero'>",
         "<div>",
-        "<p class='lede'>Monitor the daemon, profiles, and control plane from one place. Everything is read from the live SQLite ledger and rendered with the current control state.</p>",
+        "<p class='lede'>A premium read-only control surface for the trading stack. Use this to inspect live bankroll, strategy separation, fills, exposure, and execution quality without touching the bot controls.</p>",
         "<div class='hero-chips'>",
         _chip(f"Bankroll ${float(latest_state['bankroll']):.2f}" if latest_state else "Bankroll n/a"),
         _chip(f"Trades {sum(item['trade_count'] for item in performance)}"),
@@ -222,14 +159,14 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "</div>",
         "</div>",
         "<div class='hero-card hero-card--status'>",
-        "<div class='metric-label'>System state</div>",
-        f"<div class='metric-value'>{escape(str(global_control['desired_state']))}</div>",
-        f"<div class='metric-sub'>Run-once queue: {global_control['run_once_pending']}</div>",
+        "<div class='metric-label'>Ledger state</div>",
+        f"<div class='metric-value'>{escape('ONLINE' if latest_state else 'EMPTY')}</div>",
+        f"<div class='metric-sub'>{'Latest snapshot available' if latest_state else 'No state snapshot yet'}</div>",
         "<div class='status-grid'>",
-        f"<div><span>Profiles</span><strong>{len(profiles)}</strong></div>",
         f"<div><span>Open positions</span><strong>{sum(item['open_positions'] for item in performance)}</strong></div>",
         f"<div><span>Open orders</span><strong>{sum(item['open_orders'] for item in performance)}</strong></div>",
         f"<div><span>Resolved trades</span><strong>{sum(item['trade_count'] for item in performance)}</strong></div>",
+        f"<div><span>Max profile PnL</span><strong>{max((float(item['total_pnl']) for item in performance), default=0.0):+.2f}</strong></div>",
         "</div>",
         "</div>",
         "</header>",
@@ -242,23 +179,11 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "</div>",
         f"<div class='chart-frame'>{global_curve_svg}</div>" if global_curve_svg else "<div class='chart-frame empty'>No chart data yet</div>",
         "</section>",
-        "<section class='controls'>",
-        "<div class='section-head'>",
-        "<div>",
-        "<h2>Global Controls</h2>",
-        "<p>Apply a command to both strategies at once.</p>",
-        "</div>",
-        "</div>",
-        _control_row_html(command="status", profile_name=None, label="Refresh"),
-        _control_row_html(command="pause", profile_name=None, label="Pause All"),
-        _control_row_html(command="resume", profile_name=None, label="Resume All"),
-        _control_row_html(command="stop_all", profile_name=None, label="Stop All"),
-        "</section>",
         "<section class='profiles'>",
         "<div class='section-head'>",
         "<div>",
         "<h2>Profiles</h2>",
-        "<p>Profile-level control with separate accounting and live state.</p>",
+        "<p>Profile-level accounting with separate performance and live state.</p>",
         "</div>",
         "</div>",
         "<div class='profile-grid'>",
@@ -531,14 +456,10 @@ def _profile_card_html(profile: dict[str, Any]) -> list[str]:
         "<article class='card'>",
         "<div class='card-head'>",
         f"<div class='card-title'>{escape(str(profile_name))}</div>",
-        f"<div class='card-badges'>{_state_badge(effective)} {_state_badge(profile_state, accent='secondary')} {_state_badge(global_state, accent='muted')}</div>",
+        f"<div class='card-badges'>{_state_badge('observed', accent='muted')}</div>",
         "</div>",
         f"<div class='card-chart'>{equity_curve_svg}</div>" if equity_curve_svg else "<div class='card-chart empty'>No equity curve yet</div>",
         "<div class='card-grid'>",
-        _stat_cell("Effective", effective),
-        _stat_cell("Profile", profile_state),
-        _stat_cell("Global", global_state),
-        _stat_cell("Run once", profile["run_once_pending"]),
         _stat_cell("Bankroll", f"${float(profile['bankroll']):.2f}"),
         _stat_cell("Open orders", profile["open_orders"]),
         _stat_cell("Open positions", profile["open_positions"]),
@@ -546,37 +467,8 @@ def _profile_card_html(profile: dict[str, Any]) -> list[str]:
         _stat_cell("Win rate", "n/a" if profile["win_rate"] is None else f"{float(profile['win_rate']):.1%}"),
         _stat_cell("PnL", f"${float(profile['total_pnl']):.2f}"),
         "</div>",
-        "<div class='button-row'>",
-        _button_form("status", profile_name, "Status"),
-        _button_form("pause", profile_name, "Pause"),
-        _button_form("resume", profile_name, "Resume"),
-        _button_form("run_once", profile_name, "Run Once"),
-        _button_form("start", profile_name, "Start"),
-        _button_form("stop", profile_name, "Stop"),
-        "</div>",
         "</article>",
     ]
-
-
-def _button_form(command: str, profile_name: str | None, label: str) -> str:
-    profile_value = "" if profile_name is None else escape(profile_name)
-    return (
-        "<form method='post' action='/control' class='inline-form'>"
-        f"<input type='hidden' name='command' value='{escape(command)}'>"
-        f"<input type='hidden' name='profile_name' value='{profile_value}'>"
-        f"<button type='submit'>{escape(label)}</button>"
-        "</form>"
-    )
-
-
-def _control_row_html(command: str, profile_name: str | None, label: str) -> str:
-    return (
-        "<form method='post' action='/control' class='control-row'>"
-        f"<input type='hidden' name='command' value='{escape(command)}'>"
-        f"<input type='hidden' name='profile_name' value='{'' if profile_name is None else escape(profile_name)}'>"
-        f"<button type='submit'>{escape(label)}</button>"
-        "</form>"
-    )
 
 
 def _stat_cell(label: str, value: Any) -> str:
@@ -595,6 +487,26 @@ def _chip(text: str) -> str:
 def _state_badge(value: str, *, accent: str = "primary") -> str:
     normalized = value.strip().upper()
     return f"<span class='badge badge--{escape(accent)} badge--{escape(normalized.lower())}'>{escape(normalized)}</span>"
+
+
+def _serialize_profile_curve(strategy_name: str, profile: dict[str, Any]) -> str:
+    if not profile:
+        return "<div class='card-chart empty'>No profile data yet</div>"
+    # The dashboard does not have direct per-profile trade history from the summarized
+    # performance table, so we render a compact glyph based on the aggregate profile state.
+    values = [
+        float(profile["trade_count"] or 0),
+        float(profile["open_positions"] or 0),
+        float(profile["open_orders"] or 0),
+        float(profile["total_pnl"] or 0.0),
+    ]
+    accent = "#63e6be" if float(profile["total_pnl"] or 0.0) >= 0 else "#ff6b6b"
+    return _render_curve_svg(
+        _cumulative_pnl_points(values),
+        title=str(strategy_name),
+        subtitle="Profile activity summary.",
+        accent=accent,
+    )
 
 
 def _table_html(*, headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
