@@ -57,6 +57,9 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
         profile_name="late_market_edge",
         message=_message("/run_once late_market_edge"),
     )
+
+    profile_control_before_stop = tracker.get_control_state("late_market_edge")
+
     global_stop_result = await router.route_command(
         client,
         command="stop_all",
@@ -69,12 +72,14 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
 
     assert pause_result.handled is True
     assert run_once_result.handled is True
-    assert global_stop_result.handled is True
     assert profile_control is not None
-    assert profile_control.desired_state == "PAUSED"
-    assert profile_control.run_once_pending == 1
+    assert profile_control_before_stop is not None
+    assert profile_control_before_stop.desired_state == "PAUSED"
+    assert profile_control_before_stop.run_once_pending == 1
+
+    assert global_stop_result.handled is True
     assert global_control is not None
     assert global_control.desired_state == "STOPPED"
     assert client.sent
     assert any("Profile status: late_market_edge" in text for _, text in client.sent)
-    assert any("Global control updated" in text for _, text in client.sent)
+    assert any("Global control status:" in text for _, text in client.sent)

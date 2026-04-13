@@ -317,6 +317,10 @@ class EnvironmentConfig:
     anthropic_api_key: str | None
     telegram_token: str | None
     telegram_chat_id: str | None
+    web_username: str | None
+    web_password: str | None
+    web_bind_host: str
+    web_bind_port: int
     trading_economics_credentials: str | None
     news_api_key: str | None
     odds_api_key: str | None
@@ -340,6 +344,10 @@ class EnvironmentConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             telegram_token=os.getenv("TELEGRAM_TOKEN"),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+            web_username=os.getenv("WEB_USERNAME"),
+            web_password=os.getenv("WEB_PASSWORD"),
+            web_bind_host=os.getenv("WEB_BIND_HOST", "0.0.0.0"),
+            web_bind_port=_read_int("WEB_BIND_PORT", default=8080),
             trading_economics_credentials=os.getenv("TRADING_ECONOMICS_CREDENTIALS"),
             news_api_key=os.getenv("NEWS_API_KEY"),
             odds_api_key=os.getenv("ODDS_API_KEY"),
