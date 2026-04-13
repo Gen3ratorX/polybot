@@ -1,0 +1,16 @@
+.env
+.env.local
+.pytest_cache/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3
+dist/
+build/
+.DS_Store

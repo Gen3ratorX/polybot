@@ -1,0 +1,167 @@
+sizing:
+  fractional_kelly: 1.0
+  risk_per_trade_pct: 0.15
+  max_position_pct: 0.15
+  max_position_usd: 5.0
+  min_valid_order_shares: 5.0
+  bankroll_floor_for_live: 20.0
+
+profiles:
+  late_market_edge:
+    filter_bounds:
+      min_price: 0.85
+      max_price: 0.97
+      sports_max_price: 0.97
+      min_hours_to_close: 2.0
+      max_hours_to_close: 6.0
+      min_volume: 500.0
+      max_combined_price: 1.0
+    flow_risk_thresholds:
+      max_volume_change_1h_pct: 15.0
+      max_abs_one_hour_price_change: 0.03
+      min_liquidity: 2500.0
+    category_weights:
+      sports: 1.0
+      crypto: 0.85
+      politics: 0.75
+      unknown: 0.80
+    exit_rules:
+      stop_loss_pct: 0.05
+      max_hold_minutes_without_progress: 180
+    min_score: 7.0
+    max_per_event_candidates: 2
+    max_per_template_candidates: 3
+    exact_score_max_per_event: 1
+    paper_trade_minimum_trades: 200
+    require_deterministic_markets: true
+  research_strategy:
+    filter_bounds:
+      min_price: 0.85
+      max_price: 0.97
+      sports_max_price: 0.975
+      min_hours_to_close: 0.0
+      max_hours_to_close: 720.0
+      min_volume: 1000.0
+      max_combined_price: 1.0
+    flow_risk_thresholds:
+      max_volume_change_1h_pct: 15.0
+      max_abs_one_hour_price_change: 0.03
+      min_liquidity: 2500.0
+    category_weights:
+      sports: 1.0
+      crypto: 0.85
+      politics: 0.75
+      unknown: 0.80
+    exit_rules:
+      stop_loss_pct: 0.05
+      max_hold_minutes_without_progress: 180
+    min_score: 7.25
+    max_per_event_candidates: 2
+    max_per_template_candidates: 3
+    exact_score_max_per_event: 1
+    paper_trade_minimum_trades: 200
+    require_deterministic_markets: true
+  btc_up_down:
+    filter_bounds:
+      min_price: 0.40
+      max_price: 0.60
+      sports_max_price: 0.60
+      min_hours_to_close: 0.0
+      max_hours_to_close: 24.0
+      min_volume: 5000.0
+      max_combined_price: 1.0
+    flow_risk_thresholds:
+      max_volume_change_1h_pct: 500.0
+      max_abs_one_hour_price_change: 0.25
+      min_liquidity: 10000.0
+    category_weights:
+      crypto: 1.2
+      sports: 0.4
+      politics: 0.4
+      unknown: 0.35
+    signal_rules:
+      mode: momentum
+      asset_keywords:
+        - bitcoin
+        - btc
+      catalyst_keywords:
+        - bitcoin
+        - btc
+        - fomc
+        - cpi
+        - ppi
+        - payroll
+        - jobs
+        - gdp
+        - fed
+        - inflation
+      catalyst_countries:
+        - united states
+      catalyst_event_keywords:
+        - fomc
+        - cpi
+        - ppi
+        - payroll
+        - jobs
+        - gdp
+        - fed
+        - inflation
+        - unemployment
+        - jobless claims
+      catalyst_min_importance: 2
+      catalyst_arm_before_minutes: 30
+      catalyst_arm_after_minutes: 45
+      catalyst_refresh_minutes: 30
+      catalyst_lookahead_days: 10
+      spot_symbol: XBTUSD
+      spot_min_abs_return_1h_pct: 0.01
+      spot_min_abs_return_15m_pct: 0.003
+      spot_min_contract_lag_pct: 0.005
+      spot_max_age_seconds: 120
+      momentum_min_abs_volume_change_1h_pct: 15.0
+      momentum_min_abs_one_hour_price_change: 0.015
+      momentum_price_center: 0.5
+      momentum_price_width: 0.1
+    exit_rules:
+      stop_loss_pct: 0.04
+      max_hold_minutes_without_progress: 60
+    min_score: 6.0
+    max_per_event_candidates: 1
+    max_per_template_candidates: 2
+    exact_score_max_per_event: 1
+    paper_trade_minimum_trades: 100
+    require_deterministic_markets: true
+    execution_style: taker
+
+execution:
+  order_timeout_seconds: 90
+  max_open_positions: 3
+  max_position_pct: 0.15
+  min_position_usd: 5.0
+  max_position_usd: 5.0
+  dynamic_min_position: true
+  execution_style: maker
+  exit_target_price: 0.99
+  websocket_heartbeat_seconds: 10
+
+risk:
+  operator_review_required_levels:
+    - L3
+    - L4
+    - L5
+  health_check_interval_seconds: 30
+
+autocorrect:
+  cycle_trades: 50
+  loosen_threshold: 0.92
+  tighten_threshold: 0.82
+  warn_threshold: 0.75
+
+ai_scoring:
+  enabled: true
+  min_rules_score_to_use_ai: 6.0
+  max_rules_score_to_use_ai: 7.5
+  max_daily_ai_calls: 30
+
+notifications:
+  daily_summary_hour_utc: 0
