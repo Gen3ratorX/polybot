@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from api.catalyst import CatalystEvent
 from db import queries
 from api.spot import SpotSnapshot
+from models.control import ProfileControlState, ResolvedControlState
 from models import BotState, OutcomeSide, Position, PositionStatus, Trade, TradeOutcome
 
 
@@ -24,6 +25,7 @@ class TradeTracker:
         with self.connection() as conn:
             conn.executescript(schema_path.read_text())
             _ensure_schema_columns(conn)
+            self._ensure_default_controls(conn)
 
     @contextmanager
     def connection(self) -> sqlite3.Connection:
@@ -618,6 +620,144 @@ class TradeTracker:
             cursor = conn.execute(queries.INSERT_STATE, payload)
             return int(cursor.lastrowid)
 
+    def get_control_state(self, profile_name: str | None = None) -> ProfileControlState | None:
+        control_key = _control_key(profile_name)
+        with self.connection() as conn:
+            row = conn.execute(
+                queries.SELECT_PROFILE_CONTROL,
+                {"control_key": control_key},
+            ).fetchone()
+        if row is None:
+            return None
+        return _control_state_from_row(row)
+
+    def list_control_states(self) -> tuple[ProfileControlState, ...]:
+        with self.connection() as conn:
+            rows = conn.execute(queries.SELECT_ALL_PROFILE_CONTROLS).fetchall()
+        return tuple(_control_state_from_row(row) for row in rows)
+
+    def get_telegram_router_state(self) -> dict[str, object] | None:
+        with self.connection() as conn:
+            row = conn.execute(queries.SELECT_TELEGRAM_ROUTER_STATE).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "last_update_id": int(row["last_update_id"]),
+            "updated_at": _parse_datetime(row["updated_at"]),
+            "last_error": row["last_error"],
+        }
+
+    def set_telegram_router_state(
+        self,
+        *,
+        last_update_id: int,
+        last_error: str | None = None,
+    ) -> None:
+        payload = {
+            "last_update_id": last_update_id,
+            "updated_at": _serialize_datetime(datetime.now(UTC)),
+            "last_error": last_error,
+        }
+        with self.connection() as conn:
+            conn.execute(queries.UPSERT_TELEGRAM_ROUTER_STATE, payload)
+
+    def upsert_control_state(
+        self,
+        *,
+        profile_name: str | None,
+        desired_state: str,
+        run_once_pending: int | None = None,
+        run_once_delta: int = 0,
+        updated_by: str | None = None,
+        source_chat_id: str | None = None,
+        source_message_id: int | None = None,
+        last_command: str | None = None,
+        notes: str | None = None,
+    ) -> ProfileControlState:
+        control_key = _control_key(profile_name)
+        scope = "GLOBAL" if profile_name is None else "PROFILE"
+        existing = self.get_control_state(profile_name)
+        pending = run_once_pending
+        if pending is None:
+            base_pending = existing.run_once_pending if existing is not None else 0
+            pending = max(0, base_pending + run_once_delta)
+        payload = {
+            "control_key": control_key,
+            "scope": scope,
+            "profile_name": profile_name,
+            "desired_state": _normalize_control_state(desired_state),
+            "run_once_pending": int(pending),
+            "updated_at": _serialize_datetime(datetime.now(UTC)),
+            "updated_by": updated_by,
+            "source_chat_id": source_chat_id,
+            "source_message_id": source_message_id,
+            "last_command": last_command,
+            "notes": notes,
+        }
+        with self.connection() as conn:
+            conn.execute(queries.UPSERT_PROFILE_CONTROL, payload)
+        return self.get_control_state(profile_name) or ProfileControlState(
+            control_key=control_key,
+            scope=scope,
+            profile_name=profile_name,
+            desired_state=payload["desired_state"],
+            run_once_pending=payload["run_once_pending"],
+            updated_at=datetime.now(UTC),
+            updated_by=updated_by,
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+            last_command=last_command,
+            notes=notes,
+        )
+
+    def consume_run_once(self, profile_name: str, count: int = 1) -> ProfileControlState | None:
+        if count <= 0:
+            raise ValueError("count must be positive")
+        current = self.get_control_state(profile_name)
+        if current is None:
+            return None
+        pending = max(0, current.run_once_pending - count)
+        return self.upsert_control_state(
+            profile_name=profile_name,
+            desired_state=current.desired_state,
+            run_once_pending=pending,
+            updated_by=current.updated_by,
+            source_chat_id=current.source_chat_id,
+            source_message_id=current.source_message_id,
+            last_command=current.last_command,
+            notes=current.notes,
+        )
+
+    def resolve_control_state(self, profile_name: str) -> ResolvedControlState:
+        global_state = self.get_control_state(None) or ProfileControlState(
+            control_key="GLOBAL",
+            scope="GLOBAL",
+            profile_name=None,
+            desired_state="RUNNING",
+            run_once_pending=0,
+        )
+        profile_state = self.get_control_state(profile_name) or ProfileControlState(
+            control_key=profile_name,
+            scope="PROFILE",
+            profile_name=profile_name,
+            desired_state="RUNNING",
+            run_once_pending=0,
+        )
+        if global_state.desired_state == "STOPPED" or profile_state.desired_state == "STOPPED":
+            effective_state = "STOPPED"
+        elif global_state.desired_state == "PAUSED" or profile_state.desired_state == "PAUSED":
+            effective_state = "PAUSED"
+        else:
+            effective_state = "RUNNING"
+        return ResolvedControlState(
+            profile_name=profile_name,
+            global_state=global_state,
+            profile_state=profile_state,
+            effective_state=effective_state,
+            run_once_pending=profile_state.run_once_pending,
+        )
+
     def build_state_snapshot(
         self,
         *,
@@ -978,6 +1118,24 @@ class TradeTracker:
             )
         return report
 
+    def _ensure_default_controls(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            queries.UPSERT_PROFILE_CONTROL,
+            {
+                "control_key": "GLOBAL",
+                "scope": "GLOBAL",
+                "profile_name": None,
+                "desired_state": "RUNNING",
+                "run_once_pending": 0,
+                "updated_at": _serialize_datetime(datetime.now(UTC)),
+                "updated_by": "bootstrap",
+                "source_chat_id": None,
+                "source_message_id": None,
+                "last_command": "bootstrap",
+                "notes": "Default global control state",
+            },
+        )
+
 
 def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
     _ensure_columns(
@@ -1024,6 +1182,17 @@ def _ensure_columns(
     for column_name, column_type in columns:
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _control_key(profile_name: str | None) -> str:
+    return "GLOBAL" if profile_name is None else profile_name
+
+
+def _normalize_control_state(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized not in {"RUNNING", "PAUSED", "STOPPED"}:
+        raise ValueError("desired_state must be RUNNING, PAUSED, or STOPPED")
+    return normalized
 
 
 def _database_path_from_url(database_url: str) -> Path:
@@ -1125,6 +1294,22 @@ def _order_from_row(row: sqlite3.Row) -> dict[str, object]:
         "last_seen_at": _parse_datetime(row["last_seen_at"]),
         "exchange_payload": parsed_payload,
     }
+
+
+def _control_state_from_row(row: sqlite3.Row) -> ProfileControlState:
+    return ProfileControlState(
+        control_key=str(row["control_key"]),
+        scope=str(row["scope"]),
+        profile_name=row["profile_name"],
+        desired_state=str(row["desired_state"]),
+        run_once_pending=int(row["run_once_pending"] or 0),
+        updated_at=_parse_datetime(row["updated_at"]),
+        updated_by=row["updated_by"],
+        source_chat_id=row["source_chat_id"],
+        source_message_id=int(row["source_message_id"]) if row["source_message_id"] is not None else None,
+        last_command=row["last_command"],
+        notes=row["notes"],
+    )
 
 
 def _spot_snapshot_from_row(row: sqlite3.Row) -> SpotSnapshot:

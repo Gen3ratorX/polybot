@@ -885,6 +885,107 @@ def run_supervised_cycle(
     cancel_if_open: bool,
 ) -> ExecutedCycle:
     with acquire_database_lock(env.database_url):
+        control = tracker.resolve_control_state(runtime.strategy.name)
+        latest_state = tracker.get_latest_state(strategy_name=runtime.strategy.name) or tracker.get_latest_state()
+        if control.should_stop():
+            pause_reason = "Stopped via Telegram command"
+            paused_state = tracker.build_state_snapshot(
+                bankroll=0.0 if latest_state is None else latest_state.bankroll,
+                phase=0 if latest_state is None else latest_state.phase,
+                strategy_min_price=runtime.strategy.min_price,
+                strategy_min_score=runtime.strategy.min_score,
+                strategy_name=runtime.strategy.name,
+                open_orders=tracker.open_order_count(strategy_name=runtime.strategy.name),
+                open_positions=tracker.open_position_count(strategy_name=runtime.strategy.name),
+                is_paused=True,
+                pause_level="USER",
+                pause_reason=pause_reason,
+                pause_until=None,
+            )
+            paused_state_id = tracker.record_state(paused_state)
+            send_optional_alert(
+                env,
+                f"Supervised runner stopped by Telegram: {runtime.strategy.name}",
+                level="INFO",
+            )
+            prepared = PreparedCycle(
+                state_id=paused_state_id,
+                bankroll=paused_state.bankroll,
+                phase=paused_state.phase,
+                budget_cap=0.0,
+                selected_budget=0.0,
+                kill_signal=None,
+                skip_reason=pause_reason,
+                reconciled_positions=(),
+                top_candidates=(),
+                near_miss_candidates=(),
+                preview=None,
+            )
+            return ExecutedCycle(
+                prepared=prepared,
+                submit_response=None,
+                cancel_response=None,
+                final_order_status=None,
+                tracked_trade_id=None,
+                position_id=None,
+                trade_outcome=None,
+                state_id=paused_state_id,
+                exit_result=None,
+                execution_status="STOPPED",
+                timing={
+                    "spot_fetch_latency_seconds": None,
+                    "catalyst_fetch_latency_seconds": None,
+                    "signal_to_submit_seconds": None,
+                },
+            )
+        if control.should_pause() and control.run_once_pending <= 0:
+            pause_reason = "Paused via Telegram command"
+            paused_state = tracker.build_state_snapshot(
+                bankroll=0.0 if latest_state is None else latest_state.bankroll,
+                phase=0 if latest_state is None else latest_state.phase,
+                strategy_min_price=runtime.strategy.min_price,
+                strategy_min_score=runtime.strategy.min_score,
+                strategy_name=runtime.strategy.name,
+                open_orders=tracker.open_order_count(strategy_name=runtime.strategy.name),
+                open_positions=tracker.open_position_count(strategy_name=runtime.strategy.name),
+                is_paused=True,
+                pause_level="USER",
+                pause_reason=pause_reason,
+                pause_until=None,
+            )
+            paused_state_id = tracker.record_state(paused_state)
+            prepared = PreparedCycle(
+                state_id=paused_state_id,
+                bankroll=paused_state.bankroll,
+                phase=paused_state.phase,
+                budget_cap=0.0,
+                selected_budget=0.0,
+                kill_signal=None,
+                skip_reason=pause_reason,
+                reconciled_positions=(),
+                top_candidates=(),
+                near_miss_candidates=(),
+                preview=None,
+            )
+            return ExecutedCycle(
+                prepared=prepared,
+                submit_response=None,
+                cancel_response=None,
+                final_order_status=None,
+                tracked_trade_id=None,
+                position_id=None,
+                trade_outcome=None,
+                state_id=paused_state_id,
+                exit_result=None,
+                execution_status="PAUSED",
+                timing={
+                    "spot_fetch_latency_seconds": None,
+                    "catalyst_fetch_latency_seconds": None,
+                    "signal_to_submit_seconds": None,
+                },
+            )
+        if control.run_once_pending > 0:
+            tracker.consume_run_once(runtime.strategy.name)
         asyncio.run(
             _reconcile_open_orders_before_cycle(
                 env=env,

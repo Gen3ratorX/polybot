@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from contextlib import contextmanager
 
 from api.ai_scorer import AIScorer
 from bot.config import AIScoringConfig, load_runtime_config
@@ -11,8 +12,11 @@ from bot.supervisor import (
     distinct_scored_candidates,
     evaluate_candidates,
     has_open_position_capacity,
+    run_supervised_cycle,
 )
+from bot.supervisor import PreparedCycle, ExecutedCycle
 from bot.tracker import TradeTracker
+from models import BotState, ProfileControlState, ResolvedControlState
 from models import Market, OutcomeSide
 
 
@@ -161,6 +165,63 @@ def test_has_open_position_capacity_respects_execution_cap(tmp_path) -> None:
         tracker.register_open_position_from_trade(trade)
 
     assert has_open_position_capacity(tracker=tracker, runtime=runtime) is False
+
+
+def test_run_supervised_cycle_stops_on_profile_control(tmp_path, monkeypatch) -> None:
+    runtime = load_runtime_config("config.yaml")
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'control.db'}")
+    tracker.initialize()
+
+    class FakeControl:
+        def should_stop(self) -> bool:
+            return True
+
+        def should_pause(self) -> bool:
+            return False
+
+        run_once_pending = 0
+
+    monkeypatch.setattr(tracker, "resolve_control_state", lambda profile_name: FakeControl())
+    monkeypatch.setattr(tracker, "get_latest_state", lambda strategy_name=None: None)
+    monkeypatch.setattr(tracker, "open_order_count", lambda strategy_name=None: 0)
+    monkeypatch.setattr(tracker, "open_position_count", lambda strategy_name=None: 0)
+    monkeypatch.setattr(
+        tracker,
+        "build_state_snapshot",
+        lambda **kwargs: BotState(
+            timestamp=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+            bankroll=10.0,
+            phase=0,
+            bankroll_start_of_day=10.0,
+            bankroll_start_of_week=10.0,
+            strategy_name=runtime.strategy.name,
+        ),
+    )
+    monkeypatch.setattr(tracker, "record_state", lambda state: 99)
+    monkeypatch.setattr("bot.supervisor.send_optional_alert", lambda *args, **kwargs: None)
+
+    @contextmanager
+    def fake_lock(*args, **kwargs):
+        yield None
+
+    monkeypatch.setattr("bot.supervisor.acquire_database_lock", fake_lock)
+
+    result = run_supervised_cycle(
+        env=type("Env", (), {"database_url": tracker.database_url, "telegram_token": None, "telegram_chat_id": None})(),
+        runtime=runtime,
+        tracker=tracker,
+        requested_budget=None,
+        limit_price=None,
+        top=5,
+        near_misses=5,
+        submit=True,
+        monitor_seconds=20,
+        poll_interval=2.0,
+        cancel_if_open=False,
+    )
+
+    assert result.execution_status == "STOPPED"
+    assert result.prepared.skip_reason == "Stopped via Telegram command"
 
 
 def _market(market_id: str, *, volume_change: float, liquidity: float, event_id: str | None = None) -> Market:

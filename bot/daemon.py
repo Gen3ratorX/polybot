@@ -97,6 +97,8 @@ def run_daemon(
                 )
             )
             completed += 1
+            if executed.execution_status == "STOPPED":
+                break
             if cycles is not None and completed >= cycles:
                 break
             sleeper(sleep_seconds)

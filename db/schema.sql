@@ -141,6 +141,27 @@ CREATE TABLE IF NOT EXISTS positions (
   notes             TEXT
 );
 
+CREATE TABLE IF NOT EXISTS profile_controls (
+  control_key         TEXT PRIMARY KEY,
+  scope               TEXT NOT NULL CHECK (scope IN ('GLOBAL', 'PROFILE')),
+  profile_name        TEXT,
+  desired_state       TEXT NOT NULL CHECK (desired_state IN ('RUNNING', 'PAUSED', 'STOPPED')),
+  run_once_pending    INTEGER NOT NULL DEFAULT 0,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by          TEXT,
+  source_chat_id      TEXT,
+  source_message_id   INTEGER,
+  last_command        TEXT,
+  notes               TEXT
+);
+
+CREATE TABLE IF NOT EXISTS telegram_router_state (
+  id                  INTEGER PRIMARY KEY CHECK (id = 1),
+  last_update_id      INTEGER NOT NULL DEFAULT 0,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_error          TEXT
+);
+
 CREATE TABLE IF NOT EXISTS candidate_snapshots (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -180,6 +201,8 @@ CREATE INDEX IF NOT EXISTS idx_spot_ticks_observed_at ON spot_ticks(observed_at)
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_positions_strategy_name ON positions(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_positions_market ON positions(market_id);
+CREATE INDEX IF NOT EXISTS idx_profile_controls_scope ON profile_controls(scope);
+CREATE INDEX IF NOT EXISTS idx_profile_controls_profile_name ON profile_controls(profile_name);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_timestamp ON candidate_snapshots(timestamp);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_category ON candidate_snapshots(category);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_cluster_key ON candidate_snapshots(cluster_key);

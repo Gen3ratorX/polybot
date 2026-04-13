@@ -206,6 +206,111 @@ VALUES (
 )
 """
 
+UPSERT_PROFILE_CONTROL = """
+INSERT INTO profile_controls (
+  control_key,
+  scope,
+  profile_name,
+  desired_state,
+  run_once_pending,
+  updated_at,
+  updated_by,
+  source_chat_id,
+  source_message_id,
+  last_command,
+  notes
+)
+VALUES (
+  :control_key,
+  :scope,
+  :profile_name,
+  :desired_state,
+  :run_once_pending,
+  :updated_at,
+  :updated_by,
+  :source_chat_id,
+  :source_message_id,
+  :last_command,
+  :notes
+)
+ON CONFLICT(control_key) DO UPDATE SET
+  scope=excluded.scope,
+  profile_name=excluded.profile_name,
+  desired_state=excluded.desired_state,
+  run_once_pending=excluded.run_once_pending,
+  updated_at=excluded.updated_at,
+  updated_by=excluded.updated_by,
+  source_chat_id=excluded.source_chat_id,
+  source_message_id=excluded.source_message_id,
+  last_command=excluded.last_command,
+  notes=excluded.notes
+"""
+
+SELECT_PROFILE_CONTROL = """
+SELECT
+  control_key,
+  scope,
+  profile_name,
+  desired_state,
+  run_once_pending,
+  updated_at,
+  updated_by,
+  source_chat_id,
+  source_message_id,
+  last_command,
+  notes
+FROM profile_controls
+WHERE control_key = :control_key
+LIMIT 1
+"""
+
+SELECT_ALL_PROFILE_CONTROLS = """
+SELECT
+  control_key,
+  scope,
+  profile_name,
+  desired_state,
+  run_once_pending,
+  updated_at,
+  updated_by,
+  source_chat_id,
+  source_message_id,
+  last_command,
+  notes
+FROM profile_controls
+ORDER BY scope ASC, profile_name ASC, control_key ASC
+"""
+
+UPSERT_TELEGRAM_ROUTER_STATE = """
+INSERT INTO telegram_router_state (
+  id,
+  last_update_id,
+  updated_at,
+  last_error
+)
+VALUES (
+  1,
+  :last_update_id,
+  :updated_at,
+  :last_error
+)
+ON CONFLICT(id) DO UPDATE SET
+  last_update_id=excluded.last_update_id,
+  updated_at=excluded.updated_at,
+  last_error=excluded.last_error
+"""
+
+SELECT_TELEGRAM_ROUTER_STATE = """
+SELECT
+  id,
+  last_update_id,
+  updated_at,
+  last_error
+FROM telegram_router_state
+WHERE id = 1
+LIMIT 1
+"""
+
 UPSERT_POSITION = """
 INSERT INTO positions (
   id,

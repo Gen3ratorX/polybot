@@ -1,6 +1,7 @@
 """Domain models package."""
 
 from models.enums import OrderAction, OrderStatus, OutcomeSide, PositionStatus, TradeOutcome
+from models.control import ProfileControlState, ResolvedControlState
 from models.market import Market
 from models.order import Order
 from models.position import Position
@@ -16,6 +17,8 @@ __all__ = [
     "OutcomeSide",
     "Position",
     "PositionStatus",
+    "ProfileControlState",
+    "ResolvedControlState",
     "Trade",
     "TradeOutcome",
 ]
