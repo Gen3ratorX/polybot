@@ -23,8 +23,11 @@ class TradeTracker:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         schema_path = Path(__file__).resolve().parents[1] / queries.CREATE_SCHEMA
         with self.connection() as conn:
-            conn.executescript(schema_path.read_text())
+            schema_text = schema_path.read_text()
+            table_statements, index_statements = self._split_schema_statements(schema_text)
+            self._apply_sql_statements(conn, table_statements)
             _ensure_schema_columns(conn)
+            self._apply_sql_statements(conn, index_statements)
             self._ensure_default_controls(conn)
 
     @contextmanager
@@ -1135,6 +1138,27 @@ class TradeTracker:
                 "notes": "Default global control state",
             },
         )
+
+    def _split_schema_statements(self, schema_text: str) -> tuple[list[str], list[str]]:
+        statements = [statement.strip() for statement in schema_text.split(";")]
+        table_statements: list[str] = []
+        index_statements: list[str] = []
+        for statement in statements:
+            if not statement or statement.startswith("--") or statement.upper().startswith("PRAGMA"):
+                if statement:
+                    table_statements.append(statement)
+                continue
+            normalized = statement.lstrip().upper()
+            if normalized.startswith("CREATE INDEX") or normalized.startswith("CREATE UNIQUE INDEX"):
+                index_statements.append(statement)
+            else:
+                table_statements.append(statement)
+        return table_statements, index_statements
+
+    def _apply_sql_statements(self, conn: sqlite3.Connection, statements: list[str]) -> None:
+        for statement in statements:
+            if statement:
+                conn.execute(f"{statement};")
 
 
 def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
