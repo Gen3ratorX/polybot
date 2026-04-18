@@ -107,6 +107,15 @@ def test_runtime_config_loads_hourly_momentum_multi_asset_stress_profile() -> No
     assert config.strategy.paper_trade_default is False
     assert config.strategy.max_position_usd == 1.0
     assert config.strategy.max_position_pct == 0.05
+    assert config.strategy.min_price == 0.3
+    assert config.strategy.max_price == 0.7
+    assert config.strategy.min_volume == 100.0
+    assert config.strategy.max_hours_to_close == 24.0
+    assert config.strategy.spot_min_abs_return_1h_pct == 0.0005
+    assert config.strategy.spot_min_abs_return_15m_pct == 0.0002
+    assert config.strategy.spot_min_contract_lag_pct == 0.0
+    assert config.strategy.momentum_min_abs_volume_change_1h_pct == 1.0
+    assert config.strategy.momentum_min_abs_one_hour_price_change == 0.0005
     assert config.strategy.trade_quota_target_trades == 50
     assert config.strategy.trade_quota_stop_after_trades is True
 

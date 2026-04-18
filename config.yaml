@@ -231,27 +231,27 @@ profiles:
     execution_style: taker
   hourly_momentum_multi_asset_stress:
     filter_bounds:
-      min_price: 0.40
-      max_price: 0.60
-      sports_max_price: 0.60
+      min_price: 0.30
+      max_price: 0.70
+      sports_max_price: 0.70
       min_hours_to_close: 0.0
-      max_hours_to_close: 2.0
-      min_volume: 3000.0
+      max_hours_to_close: 24.0
+      min_volume: 100.0
       max_combined_price: 1.0
     flow_risk_thresholds:
-      max_volume_change_1h_pct: 650.0
-      max_abs_one_hour_price_change: 0.25
-      min_liquidity: 8000.0
+      max_volume_change_1h_pct: 1000.0
+      max_abs_one_hour_price_change: 0.50
+      min_liquidity: 1000.0
     category_weights:
-      crypto: 1.15
-      sports: 0.35
-      politics: 0.35
-      unknown: 0.30
+      crypto: 1.25
+      sports: 0.40
+      politics: 0.40
+      unknown: 0.35
     signal_rules:
       mode: momentum
       catalyst_mode: soft_boost
-      catalyst_multiplier_weight: 0.18
-      catalyst_multiplier_cap: 1.30
+      catalyst_multiplier_weight: 0.12
+      catalyst_multiplier_cap: 1.20
       asset_keywords:
         - bitcoin
         - btc
@@ -288,8 +288,8 @@ profiles:
         - unemployment
         - jobless claims
       catalyst_min_importance: 1
-      catalyst_arm_before_minutes: 20
-      catalyst_arm_after_minutes: 20
+      catalyst_arm_before_minutes: 30
+      catalyst_arm_after_minutes: 30
       catalyst_refresh_minutes: 10
       catalyst_lookahead_days: 5
       gamma_tag_slugs:
@@ -300,25 +300,25 @@ profiles:
         - ETHUSD
         - SOLUSD
       spot_symbol: XBTUSD
-      spot_min_abs_return_1h_pct: 0.004
-      spot_min_abs_return_15m_pct: 0.0015
-      spot_min_contract_lag_pct: 0.0025
-      spot_max_age_seconds: 90
-      momentum_min_abs_volume_change_1h_pct: 8.0
-      momentum_min_abs_one_hour_price_change: 0.004
+      spot_min_abs_return_1h_pct: 0.0005
+      spot_min_abs_return_15m_pct: 0.0002
+      spot_min_contract_lag_pct: 0.0
+      spot_max_age_seconds: 180
+      momentum_min_abs_volume_change_1h_pct: 1.0
+      momentum_min_abs_one_hour_price_change: 0.0005
       momentum_price_center: 0.5
-      momentum_price_width: 0.22
+      momentum_price_width: 0.30
     exit_rules:
-      stop_loss_pct: 0.02
-      max_hold_minutes_without_progress: 10
+      stop_loss_pct: 0.03
+      max_hold_minutes_without_progress: 20
     risk_per_trade_pct: 0.015
     max_position_pct: 0.05
     max_position_usd: 1.0
     bankroll_floor_for_live: 20.0
-    min_score: 5.4
-    max_per_event_candidates: 4
-    max_per_template_candidates: 6
-    exact_score_max_per_event: 2
+    min_score: 4.5
+    max_per_event_candidates: 8
+    max_per_template_candidates: 12
+    exact_score_max_per_event: 4
     paper_trade_minimum_trades: 50
     paper_trade_default: false
     require_deterministic_markets: true
