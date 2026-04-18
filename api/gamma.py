@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from time import perf_counter
 from typing import Any
 
 import aiohttp
 
 from models.market import Market
+
+logger = logging.getLogger(__name__)
 
 
 class GammaAPIError(RuntimeError):
@@ -17,12 +22,20 @@ class GammaClient:
         base_url: str = "https://gamma-api.polymarket.com",
         *,
         session: aiohttp.ClientSession | Any | None = None,
-        timeout_seconds: int = 60,
+        timeout_seconds: float = 10.0,
+        page_delay_seconds: float = 0.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._session = session
         self._owns_session = session is None
-        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._request_timeout_seconds = float(timeout_seconds)
+        self._page_delay_seconds = max(0.0, float(page_delay_seconds))
+        self._timeout = aiohttp.ClientTimeout(
+            total=self._request_timeout_seconds,
+            connect=min(5.0, self._request_timeout_seconds),
+            sock_connect=min(5.0, self._request_timeout_seconds),
+            sock_read=self._request_timeout_seconds,
+        )
 
     async def __aenter__(self) -> "GammaClient":
         await self._ensure_session()
@@ -86,6 +99,13 @@ class GammaClient:
         offset = 0
 
         while True:
+            page_started = perf_counter()
+            logger.debug(
+                "Gamma fetch_all_open_markets page start offset=%s limit=%s timeout=%.1fs",
+                offset,
+                page_size,
+                self._request_timeout_seconds,
+            )
             payload = await self._get_json(
                 "/markets",
                 params={
@@ -109,11 +129,20 @@ class GammaClient:
                 seen_market_ids.add(market.market_id)
                 parsed_batch.append(market)
             all_markets.extend(parsed_batch)
+            logger.debug(
+                "Gamma fetch_all_open_markets page end offset=%s fetched=%s parsed=%s elapsed=%.3fs",
+                offset,
+                len(payload),
+                len(parsed_batch),
+                perf_counter() - page_started,
+            )
             if len(payload) < page_size:
                 break
             if not parsed_batch:
                 break
             offset += page_size
+            if self._page_delay_seconds > 0:
+                await asyncio.sleep(self._page_delay_seconds)
 
         return all_markets
 
@@ -127,16 +156,37 @@ class GammaClient:
         cleaned_params = {
             key: value for key, value in (params or {}).items() if value is not None
         }
-        async with session.get(
-            f"{self.base_url}{path}",
-            params=cleaned_params,
-        ) as response:
-            if response.status >= 400:
-                body = await response.text()
-                raise GammaAPIError(
-                    f"Gamma API request failed ({response.status}): {body[:200]}"
-                )
-            return await response.json()
+        url = f"{self.base_url}{path}"
+        started = perf_counter()
+        logger.debug("Gamma GET start path=%s params=%s timeout=%.1fs", path, cleaned_params, self._request_timeout_seconds)
+        try:
+            async with asyncio.timeout(self._request_timeout_seconds):
+                async with session.get(url, params=cleaned_params) as response:
+                    body: str | None = None
+                    if response.status >= 400:
+                        body = await response.text()
+                        raise GammaAPIError(
+                            f"Gamma API request failed ({response.status}) path={path} params={cleaned_params}: {body[:200]}"
+                        )
+                    payload = await response.json()
+                    logger.debug(
+                        "Gamma GET end path=%s status=%s elapsed=%.3fs",
+                        path,
+                        response.status,
+                        perf_counter() - started,
+                    )
+                    return payload
+        except TimeoutError as exc:
+            logger.warning(
+                "Gamma GET timeout path=%s params=%s timeout=%.1fs elapsed=%.3fs",
+                path,
+                cleaned_params,
+                self._request_timeout_seconds,
+                perf_counter() - started,
+            )
+            raise GammaAPIError(
+                f"Gamma API request timed out after {self._request_timeout_seconds:.1f}s: {path}"
+            ) from exc
 
     async def _ensure_session(self) -> aiohttp.ClientSession | Any:
         if self._session is None:

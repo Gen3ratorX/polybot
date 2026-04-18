@@ -8,6 +8,7 @@ from bot.config import AIScoringConfig, load_runtime_config
 from bot.ranker import RankedMarket
 from bot.supervisor import (
     PreparedCycle,
+    determine_live_budget_ceiling,
     determine_live_budget,
     distinct_scored_candidates,
     evaluate_candidates,
@@ -54,6 +55,24 @@ def test_determine_live_budget_caps_to_execution_and_autoscale_limits() -> None:
     )
 
     assert budget == 3.0
+
+
+def test_determine_live_budget_uses_profile_specific_scaling_caps() -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+
+    budget_ceiling = determine_live_budget_ceiling(
+        bankroll=100.0,
+        runtime=runtime,
+        requested_budget=20.0,
+    )
+    budget = determine_live_budget(
+        bankroll=100.0,
+        runtime=runtime,
+        requested_budget=20.0,
+    )
+
+    assert budget_ceiling == 2.0
+    assert budget == 1.5
 
 
 def test_evaluate_candidates_uses_ai_blended_score_for_ordering() -> None:

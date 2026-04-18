@@ -277,6 +277,52 @@ def test_scanner_rejects_btc_without_active_catalyst() -> None:
     assert "catalyst_inactive" in decision.reasons
 
 
+def test_scanner_allows_hourly_momentum_multi_asset_without_active_catalyst() -> None:
+    reference = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
+    scalp_config = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    scanner = MarketScanner(
+        gamma_client=StubGammaClient([]), config=scalp_config.strategy
+    )
+    market = _market(
+        "btc-scalp",
+        end_date=reference + timedelta(minutes=42),
+        yes_price=0.54,
+        no_price=0.46,
+        volume=12_000,
+        category="crypto",
+        question="Will Ethereum finish the hour above the range?",
+        slug="ethereum-hourly-range",
+        liquidity=30_000.0,
+        volume_change_1h_pct=14.0,
+        one_hour_price_change=0.01,
+    )
+    spot_snapshots = {
+        "ETHUSD": SpotSnapshot(
+            symbol="ETHUSD",
+            pair="ETHUSD",
+            spot_price=3400.0,
+            return_15m_pct=0.004,
+            return_1h_pct=0.02,
+            fetch_latency_seconds=0.2,
+            observed_at=reference,
+            age_seconds=30.0,
+            source="kraken",
+            payload=None,
+        )
+    }
+
+    decision = scanner.diagnose_market(
+        market,
+        as_of=reference,
+        catalyst_snapshot=None,
+        spot_snapshot=spot_snapshots,
+    )
+
+    assert decision.qualifies is True
+    assert "catalyst_inactive" not in decision.reasons
+    assert "spot_missing" not in decision.reasons
+
+
 def test_scanner_uses_spot_snapshot_for_btc_momentum_signal() -> None:
     reference = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
     btc_config = load_runtime_config("config.yaml", strategy_section="btc_up_down")
@@ -365,6 +411,8 @@ def _market(
     no_price: float,
     volume: float,
     category: str = "sports",
+    question: str | None = None,
+    slug: str | None = None,
     active: bool = True,
     closed: bool = False,
     archived: bool = False,
@@ -375,7 +423,7 @@ def _market(
     return Market(
         market_id=market_id,
         condition_id=f"cond-{market_id}",
-        question=f"Question {market_id}",
+        question=question or f"Question {market_id}",
         end_date=end_date,
         yes_token_id=f"yes-{market_id}",
         no_token_id=f"no-{market_id}",
@@ -383,6 +431,7 @@ def _market(
         no_price=no_price,
         volume=volume,
         category=category,
+        slug=slug,
         liquidity=liquidity,
         volume_change_1h_pct=volume_change_1h_pct,
         one_hour_price_change=one_hour_price_change,

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+import asyncio
+import logging
 from time import perf_counter
 from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 
 class CatalystFeedError(RuntimeError):
@@ -111,13 +115,19 @@ class TradingEconomicsCalendarClient:
         *,
         credentials: str | None = None,
         session: aiohttp.ClientSession | Any | None = None,
-        timeout_seconds: int = 20,
+        timeout_seconds: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.credentials = credentials.strip() if credentials else None
         self._session = session
         self._owns_session = session is None
-        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._request_timeout_seconds = float(timeout_seconds)
+        self._timeout = aiohttp.ClientTimeout(
+            total=self._request_timeout_seconds,
+            connect=min(5.0, self._request_timeout_seconds),
+            sock_connect=min(5.0, self._request_timeout_seconds),
+            sock_read=self._request_timeout_seconds,
+        )
 
     async def __aenter__(self) -> "TradingEconomicsCalendarClient":
         await self._ensure_session()
@@ -138,6 +148,13 @@ class TradingEconomicsCalendarClient:
         start_date: datetime,
         end_date: datetime,
     ) -> tuple[CatalystEvent, ...]:
+        logger.debug(
+            "Catalyst fetch start countries=%s start=%s end=%s timeout=%.1fs",
+            countries,
+            start_date.astimezone(UTC).isoformat(),
+            end_date.astimezone(UTC).isoformat(),
+            self._request_timeout_seconds,
+        )
         normalized_countries = tuple(
             country.strip().lower()
             for country in countries
@@ -156,6 +173,7 @@ class TradingEconomicsCalendarClient:
                 )
             )
         events.sort(key=lambda item: (item.date, item.country, item.event))
+        logger.debug("Catalyst fetch end events=%s", len(events))
         return tuple(events)
 
     async def _fetch_country_events(
@@ -181,11 +199,40 @@ class TradingEconomicsCalendarClient:
         session = await self._ensure_session()
         cleaned_params = {key: value for key, value in (params or {}).items() if value is not None}
         cleaned_params["c"] = self.credentials or "guest:guest"
-        async with session.get(f"{self.base_url}{path}", params=cleaned_params) as response:
-            if response.status >= 400:
-                body = await response.text()
-                raise CatalystFeedError(f"Catalyst feed request failed ({response.status}): {body[:200]}")
-            return await response.json()
+        url = f"{self.base_url}{path}"
+        started = perf_counter()
+        logger.debug(
+            "Catalyst GET start path=%s params=%s timeout=%.1fs",
+            path,
+            {key: value for key, value in cleaned_params.items() if key != "c"},
+            self._request_timeout_seconds,
+        )
+        try:
+            async with asyncio.timeout(self._request_timeout_seconds):
+                async with session.get(url, params=cleaned_params) as response:
+                    if response.status >= 400:
+                        body = await response.text()
+                        raise CatalystFeedError(
+                            f"Catalyst feed request failed ({response.status}) path={path}: {body[:200]}"
+                        )
+                    payload = await response.json()
+                    logger.debug(
+                        "Catalyst GET end path=%s status=%s elapsed=%.3fs",
+                        path,
+                        response.status,
+                        perf_counter() - started,
+                    )
+                    return payload
+        except TimeoutError as exc:
+            logger.warning(
+                "Catalyst GET timeout path=%s timeout=%.1fs elapsed=%.3fs",
+                path,
+                self._request_timeout_seconds,
+                perf_counter() - started,
+            )
+            raise CatalystFeedError(
+                f"Catalyst feed request timed out after {self._request_timeout_seconds:.1f}s: {path}"
+            ) from exc
 
     async def _ensure_session(self) -> aiohttp.ClientSession | Any:
         if self._session is None:

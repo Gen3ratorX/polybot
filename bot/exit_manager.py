@@ -10,6 +10,7 @@ from api.gamma import GammaClient
 from api.spot import SpotSnapshot
 from bot.config import EnvironmentConfig, RuntimeConfig, resolve_execution_style
 from bot.executor import LiveExitPreview, LiveOrderStatus, OrderExecutor
+from bot.spot import resolve_spot_snapshot_for_market
 from bot.order_monitor import monitor_order_status
 from bot.runtime_state import send_optional_alert, sync_live_state
 from bot.tracker import TradeTracker
@@ -56,7 +57,7 @@ class _ExitOrderOutcome:
 async def find_exit_candidate(
     tracker: TradeTracker,
     runtime: RuntimeConfig,
-    spot_snapshot: SpotSnapshot | None = None,
+    spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
     catalyst_snapshot: CatalystSnapshot | None = None,
 ) -> tuple[Position, object] | None:
     open_positions = tracker.list_open_positions(limit=max(1, runtime.execution.max_open_positions))
@@ -65,13 +66,18 @@ async def find_exit_candidate(
     async with GammaClient() as gamma:
         for position in open_positions:
             market = await gamma.fetch_market(position.market_id)
+            resolved_spot_snapshot = resolve_spot_snapshot_for_market(
+                market,
+                spot_snapshot,
+                available_symbols=runtime.strategy.spot_symbols,
+            )
             held_price = market.yes_price if position.side is OutcomeSide.YES else market.no_price
             estimated_proceeds = held_price * position.shares
             thesis_break = _should_thesis_break_exit(
                 position,
                 market,
                 runtime,
-                spot_snapshot=spot_snapshot,
+                spot_snapshot=resolved_spot_snapshot,
                 catalyst_snapshot=catalyst_snapshot,
             )
             take_profit = held_price >= runtime.execution.exit_target_price and estimated_proceeds > position.cost_basis
@@ -164,7 +170,7 @@ def try_auto_exit_position(
     monitor_seconds: int,
     poll_interval: float,
     cancel_if_open: bool,
-    spot_snapshot: SpotSnapshot | None = None,
+    spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
     catalyst_snapshot: CatalystSnapshot | None = None,
 ) -> ExitResult | None:
     if catalyst_snapshot is None:
@@ -181,13 +187,18 @@ def try_auto_exit_position(
     if candidate is None:
         return None
     position, market = candidate
+    resolved_spot_snapshot = resolve_spot_snapshot_for_market(
+        market,
+        spot_snapshot,
+        available_symbols=runtime.strategy.spot_symbols,
+    )
     client = build_clob_client(env, include_api_creds=True)
     executor = OrderExecutor(client, execution_style=resolve_execution_style(runtime))
     exit_reason = _auto_exit_reason(
         position,
         market,
         runtime,
-        spot_snapshot=spot_snapshot,
+        spot_snapshot=resolved_spot_snapshot,
         catalyst_snapshot=catalyst_snapshot,
     )
     realized_pnl_total = 0.0

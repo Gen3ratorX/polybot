@@ -25,7 +25,7 @@ from bot.executor import LiveOrderPreview, OrderExecutor
 from bot.order_monitor import monitor_order_status
 from bot.process_lock import acquire_database_lock
 from bot.reconciler import reconcile_manual_exits, reconcile_open_orders, reconcile_open_positions
-from bot.spot import load_active_spot_snapshot
+from bot.spot import load_active_spot_snapshot, load_active_spot_snapshots, resolve_spot_snapshot_for_market
 from bot.ranker import EdgeRanker, RankedMarket
 from bot.risk import KillSignal, RiskManager
 from bot.runtime_state import send_optional_alert, sync_live_state
@@ -157,12 +157,24 @@ def determine_live_budget_ceiling(
 ) -> float:
     autoscale = AutoScaleEngine()
     autoscale_cap = autoscale.get_max_position_size(bankroll)
-    hard_cap = min(
+    max_position_usd = _profile_or_global(
+        runtime.strategy.max_position_usd,
         runtime.sizing.max_position_usd,
-        bankroll * runtime.sizing.max_position_pct,
+    )
+    max_position_pct = _profile_or_global(
+        runtime.strategy.max_position_pct,
+        runtime.sizing.max_position_pct,
+    )
+    bankroll_floor_for_live = _profile_or_global(
+        runtime.strategy.bankroll_floor_for_live,
+        runtime.sizing.bankroll_floor_for_live,
+    )
+    hard_cap = min(
+        max_position_usd,
+        bankroll * max_position_pct,
         autoscale_cap,
     )
-    if bankroll < runtime.sizing.bankroll_floor_for_live:
+    if bankroll < bankroll_floor_for_live:
         return 0.0
     if requested_budget is not None:
         hard_cap = min(hard_cap, requested_budget)
@@ -184,10 +196,29 @@ def determine_live_budget(
     )
     if budget_ceiling <= 0:
         return 0.0
-    kelly_target = bankroll * runtime.sizing.risk_per_trade_pct * runtime.sizing.fractional_kelly
+    risk_per_trade_pct = _profile_or_global(
+        runtime.strategy.risk_per_trade_pct,
+        runtime.sizing.risk_per_trade_pct,
+    )
+    kelly_target = bankroll * risk_per_trade_pct * runtime.sizing.fractional_kelly
     if requested_budget is not None:
         kelly_target = min(kelly_target, requested_budget)
     return round(min(kelly_target, budget_ceiling), 6)
+
+
+def _profile_or_global(profile_value: float | None, global_value: float) -> float:
+    return global_value if profile_value is None else profile_value
+
+
+def _spot_latency_summary(spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None) -> float | None:
+    if spot_snapshot is None:
+        return None
+    if isinstance(spot_snapshot, dict):
+        latencies = [snapshot.fetch_latency_seconds for snapshot in spot_snapshot.values() if snapshot.fetch_latency_seconds is not None]
+        if not latencies:
+            return None
+        return round(max(latencies), 6)
+    return spot_snapshot.fetch_latency_seconds
 
 
 def has_open_position_capacity(*, tracker: TradeTracker, runtime: RuntimeConfig) -> bool:
@@ -244,7 +275,7 @@ async def prepare_supervised_cycle(
     env: EnvironmentConfig,
     runtime: RuntimeConfig,
     tracker: TradeTracker,
-    spot_snapshot: SpotSnapshot | None,
+    spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None,
     catalyst_snapshot,
     requested_budget: float | None,
     limit_price: float | None,
@@ -571,6 +602,8 @@ async def _load_cycle_spot_snapshot(
     runtime: RuntimeConfig,
     tracker: TradeTracker,
 ):
+    if runtime.strategy.spot_symbols:
+        return await load_active_spot_snapshots(env=env, runtime=runtime, tracker=tracker)
     return await load_active_spot_snapshot(env=env, runtime=runtime, tracker=tracker)
 
 
@@ -589,7 +622,7 @@ def execute_prepared_cycle(
     env: EnvironmentConfig,
     runtime: RuntimeConfig,
     tracker: TradeTracker,
-    spot_snapshot: SpotSnapshot | None,
+    spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None,
     catalyst_snapshot,
     monitor_seconds: int,
     poll_interval: float,
@@ -619,8 +652,16 @@ def execute_prepared_cycle(
     signal_to_submit_seconds = None
     spot_fetch_latency_seconds = None
     if spot_snapshot is not None:
-        signal_to_submit_seconds = round((submitted_at - spot_snapshot.observed_at).total_seconds(), 6)
-        spot_fetch_latency_seconds = spot_snapshot.fetch_latency_seconds
+        selected_spot_snapshot = resolve_spot_snapshot_for_market(
+            selected.ranked_market.market,
+            spot_snapshot,
+            available_symbols=runtime.strategy.spot_symbols,
+        )
+        if selected_spot_snapshot is None and isinstance(spot_snapshot, dict) and spot_snapshot:
+            selected_spot_snapshot = next(iter(spot_snapshot.values()))
+        if selected_spot_snapshot is not None:
+            signal_to_submit_seconds = round((submitted_at - selected_spot_snapshot.observed_at).total_seconds(), 6)
+            spot_fetch_latency_seconds = selected_spot_snapshot.fetch_latency_seconds
     order_id = executor.extract_order_id(submit_response)
     if not order_id:
         raise ValueError("Could not extract order id from submit response")
@@ -1044,7 +1085,7 @@ def run_supervised_cycle(
                     exit_result=exit_result.as_dict(),
                     execution_status="EXIT",
                     timing={
-                        "spot_fetch_latency_seconds": spot_snapshot.fetch_latency_seconds if spot_snapshot is not None else None,
+                        "spot_fetch_latency_seconds": _spot_latency_summary(spot_snapshot),
                         "catalyst_fetch_latency_seconds": catalyst_snapshot.fetch_latency_seconds if catalyst_snapshot is not None else None,
                         "signal_to_submit_seconds": None,
                     },
@@ -1087,7 +1128,7 @@ def run_supervised_cycle(
             exit_result=None,
             execution_status=None,
             timing={
-                "spot_fetch_latency_seconds": spot_snapshot.fetch_latency_seconds if spot_snapshot is not None else None,
+                "spot_fetch_latency_seconds": _spot_latency_summary(spot_snapshot),
                 "catalyst_fetch_latency_seconds": catalyst_snapshot.fetch_latency_seconds if catalyst_snapshot is not None else None,
                 "signal_to_submit_seconds": None,
             },

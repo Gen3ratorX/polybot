@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+import asyncio
+import logging
 from typing import Any
 from time import perf_counter
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 
 class SpotFeedError(RuntimeError):
@@ -37,12 +41,18 @@ class SpotFeedClient:
         base_url: str = "https://api.kraken.com",
         *,
         session: aiohttp.ClientSession | Any | None = None,
-        timeout_seconds: int = 20,
+        timeout_seconds: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._session = session
         self._owns_session = session is None
-        self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self._request_timeout_seconds = float(timeout_seconds)
+        self._timeout = aiohttp.ClientTimeout(
+            total=self._request_timeout_seconds,
+            connect=min(5.0, self._request_timeout_seconds),
+            sock_connect=min(5.0, self._request_timeout_seconds),
+            sock_read=self._request_timeout_seconds,
+        )
 
     async def __aenter__(self) -> "SpotFeedClient":
         await self._ensure_session()
@@ -61,6 +71,12 @@ class SpotFeedClient:
         observed_at = datetime.now(UTC)
         normalized_symbol = _normalize_symbol(symbol)
         pair_candidates = _pair_candidates(normalized_symbol)
+        logger.debug(
+            "Spot snapshot start symbol=%s pair_candidates=%s timeout=%.1fs",
+            normalized_symbol,
+            pair_candidates,
+            self._request_timeout_seconds,
+        )
 
         ticker_payload, ticker_pair = await self._fetch_public_result("/0/public/Ticker", pair_candidates)
         spot_price = _extract_ticker_price(ticker_payload)
@@ -93,6 +109,12 @@ class SpotFeedClient:
             source="kraken",
             payload=payload,
         )
+        logger.debug(
+            "Spot snapshot end symbol=%s pair=%s latency=%.3fs",
+            normalized_symbol,
+            ticker_pair or ohlc_60_pair or ohlc_15_pair or normalized_symbol,
+            perf_counter() - started,
+        )
 
     async def _fetch_public_result(
         self,
@@ -106,6 +128,7 @@ class SpotFeedClient:
             params = {"pair": pair}
             if extra_params:
                 params.update(extra_params)
+            logger.debug("Spot GET attempt path=%s pair=%s params=%s", path, pair, params)
             payload = await self._get_json(path, params=params)
             if not isinstance(payload, dict):
                 last_error = f"unexpected payload type for {path}"
@@ -141,11 +164,34 @@ class SpotFeedClient:
     ) -> object:
         session = await self._ensure_session()
         cleaned_params = {key: value for key, value in (params or {}).items() if value is not None}
-        async with session.get(f"{self.base_url}{path}", params=cleaned_params) as response:
-            if response.status >= 400:
-                body = await response.text()
-                raise SpotFeedError(f"Spot API request failed ({response.status}): {body[:200]}")
-            return await response.json()
+        url = f"{self.base_url}{path}"
+        started = perf_counter()
+        logger.debug("Spot GET start path=%s params=%s timeout=%.1fs", path, cleaned_params, self._request_timeout_seconds)
+        try:
+            async with asyncio.timeout(self._request_timeout_seconds):
+                async with session.get(url, params=cleaned_params) as response:
+                    if response.status >= 400:
+                        body = await response.text()
+                        raise SpotFeedError(
+                            f"Spot API request failed ({response.status}) path={path} params={cleaned_params}: {body[:200]}"
+                        )
+                    payload = await response.json()
+                    logger.debug(
+                        "Spot GET end path=%s status=%s elapsed=%.3fs",
+                        path,
+                        response.status,
+                        perf_counter() - started,
+                    )
+                    return payload
+        except TimeoutError as exc:
+            logger.warning(
+                "Spot GET timeout path=%s params=%s timeout=%.1fs elapsed=%.3fs",
+                path,
+                cleaned_params,
+                self._request_timeout_seconds,
+                perf_counter() - started,
+            )
+            raise SpotFeedError(f"Spot API request timed out after {self._request_timeout_seconds:.1f}s: {path}") from exc
 
     async def _ensure_session(self) -> aiohttp.ClientSession | Any:
         if self._session is None:

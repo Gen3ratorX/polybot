@@ -7,6 +7,7 @@ from api.catalyst import CatalystSnapshot
 from api.gamma import GammaClient
 from api.spot import SpotSnapshot
 from bot.config import StrategyProfile
+from bot.spot import resolve_spot_snapshot_for_market
 from models.market import Market
 
 
@@ -27,7 +28,7 @@ class MarketScanner:
         self,
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> list[Market]:
         markets = await self.gamma_client.fetch_all_open_markets()
@@ -38,7 +39,7 @@ class MarketScanner:
         markets: list[Market],
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> list[Market]:
         reference = as_of or datetime.now(UTC)
@@ -58,7 +59,7 @@ class MarketScanner:
         market: Market,
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> bool:
         return self.diagnose_market(
@@ -73,7 +74,7 @@ class MarketScanner:
         markets: list[Market],
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> list[ScanDecision]:
         reference = as_of or datetime.now(UTC)
@@ -92,7 +93,7 @@ class MarketScanner:
         market: Market,
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> ScanDecision:
         reference = as_of or datetime.now(UTC)
@@ -159,7 +160,7 @@ class MarketScanner:
         market: Market,
         reasons: list[str],
         *,
-        spot_snapshot: SpotSnapshot | None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None,
         catalyst_snapshot: CatalystSnapshot | None,
         as_of: datetime | None,
     ) -> None:
@@ -169,46 +170,56 @@ class MarketScanner:
             reasons.append("deterministic")
         if self.config.asset_keywords and not market.matches_any_keyword(self.config.asset_keywords):
             reasons.append("asset_keyword")
-        if self.config.catalyst_keywords and not market.matches_any_keyword(self.config.catalyst_keywords):
-            reasons.append("catalyst")
-        if self.config.catalyst_provider == "trading_economics":
-            if catalyst_snapshot is None or not catalyst_snapshot.active_events:
-                reasons.append("catalyst_inactive")
-            else:
-                active_events = catalyst_snapshot.active_events
-                if self.config.catalyst_min_importance is not None and not any(
-                    event.importance >= self.config.catalyst_min_importance for event in active_events
-                ):
-                    reasons.append("catalyst_importance")
-                if self.config.catalyst_event_keywords and not any(
-                    event.matches_any_keyword(self.config.catalyst_event_keywords) for event in active_events
-                ):
-                    reasons.append("catalyst_event")
-        elif self.config.catalyst_time_windows_utc and not _within_utc_time_windows(
-            as_of or datetime.now(UTC),
-            self.config.catalyst_time_windows_utc,
-        ):
-            reasons.append("catalyst_window")
+        resolved_spot_snapshot = resolve_spot_snapshot_for_market(
+            market,
+            spot_snapshot,
+            available_symbols=self.config.spot_symbols,
+        )
+        catalyst_mode = self.config.catalyst_mode
+        catalyst_soft_boost = catalyst_mode in {"soft", "soft_boost", "boost"}
+        if not catalyst_soft_boost:
+            if self.config.catalyst_keywords and not market.matches_any_keyword(self.config.catalyst_keywords):
+                reasons.append("catalyst")
+            if self.config.catalyst_provider == "trading_economics":
+                if catalyst_snapshot is None or not catalyst_snapshot.active_events:
+                    reasons.append("catalyst_inactive")
+                else:
+                    active_events = catalyst_snapshot.active_events
+                    if self.config.catalyst_min_importance is not None and not any(
+                        event.importance >= self.config.catalyst_min_importance for event in active_events
+                    ):
+                        reasons.append("catalyst_importance")
+                    if self.config.catalyst_event_keywords and not any(
+                        event.matches_any_keyword(self.config.catalyst_event_keywords) for event in active_events
+                    ):
+                        reasons.append("catalyst_event")
+            elif self.config.catalyst_time_windows_utc and not _within_utc_time_windows(
+                as_of or datetime.now(UTC),
+                self.config.catalyst_time_windows_utc,
+            ):
+                reasons.append("catalyst_window")
         if market.qualitative_risk_signals():
             reasons.append("qualitative")
         if market.liquidity is not None and market.liquidity < self.config.min_liquidity:
             reasons.append("thin_liquidity")
 
-        if spot_snapshot is not None:
+        if self.config.spot_symbols and resolved_spot_snapshot is None:
+            reasons.append("spot_missing")
+        if resolved_spot_snapshot is not None:
             max_age = self.config.spot_max_age_seconds
-            if max_age is not None and spot_snapshot.age_seconds > max_age:
+            if max_age is not None and resolved_spot_snapshot.age_seconds > max_age:
                 reasons.append("spot_stale")
             min_return_1h = self.config.spot_min_abs_return_1h_pct
             if min_return_1h is not None:
-                if spot_snapshot.return_1h_pct is None or abs(spot_snapshot.return_1h_pct) < min_return_1h:
+                if resolved_spot_snapshot.return_1h_pct is None or abs(resolved_spot_snapshot.return_1h_pct) < min_return_1h:
                     reasons.append("spot_return_1h")
             min_return_15m = self.config.spot_min_abs_return_15m_pct
             if min_return_15m is not None:
-                if spot_snapshot.return_15m_pct is None or abs(spot_snapshot.return_15m_pct) < min_return_15m:
+                if resolved_spot_snapshot.return_15m_pct is None or abs(resolved_spot_snapshot.return_15m_pct) < min_return_15m:
                     reasons.append("spot_return_15m")
             min_contract_lag = self.config.spot_min_contract_lag_pct
             if min_contract_lag is not None:
-                spot_move = abs(spot_snapshot.return_1h_pct or 0.0)
+                spot_move = abs(resolved_spot_snapshot.return_1h_pct or 0.0)
                 contract_move = abs(market.one_hour_price_change or 0.0)
                 if market.one_hour_price_change is None or (spot_move - contract_move) < min_contract_lag:
                     reasons.append("spot_lag")

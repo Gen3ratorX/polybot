@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 from bot.config import load_environment, load_runtime_config
 from bot.daemon import run_daemon
+from bot.logging_utils import configure_cli_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cancel-if-open", action="store_true")
     parser.add_argument("--sleep-seconds", type=float, default=None)
     parser.add_argument(
+        "--debug-http",
+        action="store_true",
+        help="Enable DEBUG logging for Gamma/spot/catalyst HTTP requests",
+    )
+    parser.add_argument(
         "--strategy-section",
         default="late_market_edge",
         help="Which strategy profile to use. Defaults to late_market_edge.",
@@ -43,6 +49,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     try:
         args = parse_args()
+        configure_cli_logging(debug_http=args.debug_http)
         env = load_environment()
         runtime = load_runtime_config(strategy_section=args.strategy_section)
         results = run_daemon(

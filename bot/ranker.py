@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from collections.abc import Mapping
 
 from api.catalyst import CatalystSnapshot
 from api.spot import SpotSnapshot
 from bot.config import StrategyProfile
+from bot.spot import resolve_spot_snapshot_for_market
 from models import Market, OutcomeSide
 
 
@@ -32,6 +34,7 @@ class ScoreBreakdown:
     base_score: float
     final_score: float
     catalyst_score: float = 0.0
+    catalyst_multiplier: float = 1.0
 
     @property
     def dominant_drag(self) -> str:
@@ -54,7 +57,7 @@ class EdgeRanker:
         market: Market,
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | Mapping[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> float:
         return self.score_breakdown(
@@ -69,20 +72,30 @@ class EdgeRanker:
         market: Market,
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | Mapping[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> ScoreBreakdown:
         reference = as_of or datetime.now(UTC)
         hours = market.hours_to_close(reference)
         price = market.near_certain_price
         mode = self.config.signal_mode
+        spread_score = self._spread_score()
+        category_multiplier = self._category_multiplier(market.category)
+        resolved_spot_snapshot = resolve_spot_snapshot_for_market(
+            market,
+            spot_snapshot,
+            available_symbols=self.config.spot_symbols,
+        )
 
         if mode == "momentum":
             price_score = self._momentum_price_score(price)
             time_score = self._momentum_time_score(hours)
-            volume_score = self._momentum_volume_score(market, spot_snapshot=spot_snapshot)
-            flow_score = self._momentum_flow_score(market, spot_snapshot=spot_snapshot)
+            volume_score = self._momentum_volume_score(market, spot_snapshot=resolved_spot_snapshot)
+            flow_score = self._momentum_flow_score(market, spot_snapshot=resolved_spot_snapshot)
             catalyst_score = self._momentum_catalyst_score(catalyst_snapshot, as_of=reference)
+            catalyst_multiplier = self._momentum_catalyst_multiplier(catalyst_score)
+            base_score = price_score + time_score + volume_score + flow_score + spread_score
+            total = round(min(base_score * category_multiplier * catalyst_multiplier, 10.0), 2)
         else:
             max_price = self._max_price_for_market(market)
             price_score = self._price_score(price, max_price=max_price)
@@ -90,11 +103,9 @@ class EdgeRanker:
             volume_score = self._volume_score(market.volume_change_1h_pct)
             flow_score = self._flow_score(market)
             catalyst_score = 0.0
-        spread_score = self._spread_score()
-        category_multiplier = self._category_multiplier(market.category)
-
-        base_score = price_score + time_score + volume_score + flow_score + spread_score + catalyst_score
-        total = round(min(base_score * category_multiplier, 10.0), 2)
+            catalyst_multiplier = 1.0
+            base_score = price_score + time_score + volume_score + flow_score + spread_score + catalyst_score
+            total = round(min(base_score * category_multiplier, 10.0), 2)
         return ScoreBreakdown(
             market_id=market.market_id,
             category=market.category,
@@ -108,6 +119,7 @@ class EdgeRanker:
             base_score=round(base_score, 4),
             final_score=total,
             catalyst_score=round(catalyst_score, 4),
+            catalyst_multiplier=round(catalyst_multiplier, 4),
         )
 
     def rank_markets(
@@ -115,7 +127,7 @@ class EdgeRanker:
         markets: list[Market],
         *,
         as_of: datetime | None = None,
-        spot_snapshot: SpotSnapshot | None = None,
+        spot_snapshot: SpotSnapshot | Mapping[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> list[RankedMarket]:
         reference = as_of or datetime.now(UTC)
@@ -284,6 +296,16 @@ class EdgeRanker:
                 score += 0.25
             best_score = max(best_score, score)
         return round(min(best_score, 1.5), 4)
+
+    def _momentum_catalyst_multiplier(self, catalyst_score: float) -> float:
+        if self.config.catalyst_mode not in {"soft", "soft_boost", "boost"}:
+            return 1.0
+        if catalyst_score <= 0:
+            return 1.0
+        weight = max(self.config.catalyst_multiplier_weight, 0.0)
+        cap = max(self.config.catalyst_multiplier_cap, 1.0)
+        multiplier = 1.0 + (catalyst_score * weight)
+        return min(multiplier, cap)
 
     def _volume_score(self, volume_change_1h_pct: float | None) -> float:
         if volume_change_1h_pct is None:

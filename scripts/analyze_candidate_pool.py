@@ -21,7 +21,8 @@ from bot.candidate_pool import (
 )
 from bot.config import load_environment, load_runtime_config
 from bot.catalyst import load_active_catalyst_snapshot
-from bot.spot import load_active_spot_snapshot
+from bot.logging_utils import configure_cli_logging
+from bot.spot import load_active_spot_snapshot, load_active_spot_snapshots
 from bot.ranker import EdgeRanker
 from bot.scanner import MarketScanner
 from bot.supervisor import evaluate_candidates
@@ -39,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         default="research_strategy",
         help="Which strategy profile to analyze. Defaults to research_strategy.",
     )
+    parser.add_argument(
+        "--debug-http",
+        action="store_true",
+        help="Enable DEBUG logging for Gamma/spot/catalyst HTTP requests",
+    )
     return parser.parse_args()
 
 
@@ -47,7 +53,11 @@ async def main_async(top: int, clusters: int, strategy_section: str) -> dict[str
     runtime = load_runtime_config(strategy_section=strategy_section)
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
-    spot_snapshot = await load_active_spot_snapshot(env=env, runtime=runtime, tracker=tracker)
+    spot_snapshot = (
+        await load_active_spot_snapshots(env=env, runtime=runtime, tracker=tracker)
+        if runtime.strategy.spot_symbols
+        else await load_active_spot_snapshot(env=env, runtime=runtime, tracker=tracker)
+    )
     catalyst_snapshot = await load_active_catalyst_snapshot(env=env, runtime=runtime, tracker=tracker)
     async with GammaClient() as gamma:
         scanner = MarketScanner(gamma, runtime.strategy)
@@ -216,6 +226,7 @@ def _scored_candidate_to_dict(item) -> dict[str, object]:
 
 def main() -> None:
     args = parse_args()
+    configure_cli_logging(debug_http=args.debug_http)
     payload = asyncio.run(main_async(args.top, args.clusters, args.strategy_section))
     print(json.dumps(payload, indent=2))
 

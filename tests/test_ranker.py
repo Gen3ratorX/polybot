@@ -197,6 +197,57 @@ def test_ranker_uses_spot_snapshot_to_reward_btc_momentum_lag() -> None:
     assert strong_breakdown.flow_score > weak_breakdown.flow_score
 
 
+def test_ranker_hourly_multi_asset_profile_boosts_momentum_without_requiring_catalyst() -> None:
+    reference = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
+    scalp_config = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    ranker = EdgeRanker(scalp_config.strategy)
+    market = _market(
+        market_id="btc-scalp",
+        category="crypto",
+        end_date=reference + timedelta(minutes=74),
+        yes_price=0.57,
+        no_price=0.43,
+        volume=8_500,
+        volume_change_1h_pct=10.0,
+        one_hour_price_change=0.008,
+        question="Will Solana finish the next hour above the range?",
+        slug="solana-hourly-range",
+    )
+    spot_snapshots = {
+        "SOLUSD": SpotSnapshot(
+            symbol="SOLUSD",
+            pair="SOLUSD",
+            spot_price=182.0,
+            return_15m_pct=0.003,
+            return_1h_pct=0.011,
+            fetch_latency_seconds=0.2,
+            observed_at=reference,
+            age_seconds=20.0,
+            source="kraken",
+            payload=None,
+        )
+    }
+    catalyst_snapshot = _btc_catalyst_snapshot(reference)
+
+    pure_breakdown = ranker.score_breakdown(
+        market,
+        as_of=reference,
+        spot_snapshot=spot_snapshots,
+        catalyst_snapshot=None,
+    )
+    boosted_breakdown = ranker.score_breakdown(
+        market,
+        as_of=reference,
+        spot_snapshot=spot_snapshots,
+        catalyst_snapshot=catalyst_snapshot,
+    )
+
+    assert pure_breakdown.final_score >= scalp_config.strategy.min_score
+    assert boosted_breakdown.final_score > pure_breakdown.final_score
+    assert boosted_breakdown.catalyst_multiplier > 1.0
+    assert boosted_breakdown.catalyst_score > 0
+
+
 def test_ranker_score_breakdown_identifies_time_as_dominant_drag_for_far_market() -> None:
     reference = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
     market = _market(
@@ -255,11 +306,13 @@ def _market(
     volume: float,
     volume_change_1h_pct: float | None,
     one_hour_price_change: float | None = None,
+    question: str | None = None,
+    slug: str | None = None,
 ) -> Market:
     return Market(
         market_id=market_id,
         condition_id=f"cond-{market_id}",
-        question=f"Question {market_id}",
+        question=question or f"Question {market_id}",
         end_date=end_date,
         yes_token_id=f"yes-{market_id}",
         no_token_id=f"no-{market_id}",
@@ -267,6 +320,7 @@ def _market(
         no_price=no_price,
         volume=volume,
         category=category,
+        slug=slug,
         volume_change_1h_pct=volume_change_1h_pct,
         one_hour_price_change=one_hour_price_change,
     )

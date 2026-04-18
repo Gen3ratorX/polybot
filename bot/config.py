@@ -38,6 +38,10 @@ class SignalRules:
     mode: str = "certainty"
     asset_keywords: tuple[str, ...] = ()
     catalyst_keywords: tuple[str, ...] = ()
+    catalyst_mode: str = "hard"
+    catalyst_multiplier_weight: float = 0.0
+    catalyst_multiplier_cap: float = 1.0
+    spot_symbols: tuple[str, ...] = ()
     catalyst_time_windows_utc: tuple[str, ...] = ()
     catalyst_provider: str = "trading_economics"
     catalyst_countries: tuple[str, ...] = ()
@@ -72,6 +76,11 @@ class StrategyProfile:
     exact_score_max_per_event: int
     paper_trade_minimum_trades: int
     require_deterministic_markets: bool
+    risk_per_trade_pct: float | None = None
+    max_position_pct: float | None = None
+    max_position_usd: float | None = None
+    bankroll_floor_for_live: float | None = None
+    paper_trade_default: bool = False
     execution_style: str | None = None
 
     @property
@@ -133,6 +142,24 @@ class StrategyProfile:
         return self.signal_rules.catalyst_keywords
 
     @property
+    def catalyst_mode(self) -> str:
+        if self.signal_rules is None:
+            return "hard"
+        return self.signal_rules.catalyst_mode.strip().lower()
+
+    @property
+    def catalyst_multiplier_weight(self) -> float:
+        if self.signal_rules is None:
+            return 0.0
+        return self.signal_rules.catalyst_multiplier_weight
+
+    @property
+    def catalyst_multiplier_cap(self) -> float:
+        if self.signal_rules is None:
+            return 1.0
+        return self.signal_rules.catalyst_multiplier_cap
+
+    @property
     def catalyst_time_windows_utc(self) -> tuple[str, ...]:
         if self.signal_rules is None:
             return ()
@@ -191,6 +218,12 @@ class StrategyProfile:
         if self.signal_rules is None:
             return "XBTUSD"
         return self.signal_rules.spot_symbol
+
+    @property
+    def spot_symbols(self) -> tuple[str, ...]:
+        if self.signal_rules is None:
+            return ()
+        return self.signal_rules.spot_symbols
 
     @property
     def spot_min_abs_return_1h_pct(self) -> float | None:
@@ -394,6 +427,8 @@ def _resolve_strategy_block(raw: dict[str, Any], strategy_section: str) -> dict[
             "btc": "btc_up_down",
             "btc_up_down": "btc_up_down",
             "btc_event_volatility": "btc_up_down",
+            "btc_momentum_scalp": "hourly_momentum_multi_asset",
+            "hourly_momentum_multi_asset": "hourly_momentum_multi_asset",
         }
         profile_name = aliases.get(strategy_section, strategy_section)
         profile = profiles.get(profile_name)
@@ -420,6 +455,11 @@ def _load_strategy(data: dict[str, Any], name: str) -> StrategyProfile:
             exact_score_max_per_event=int(data["exact_score_max_per_event"]),
             paper_trade_minimum_trades=int(data["paper_trade_minimum_trades"]),
             require_deterministic_markets=bool(data["require_deterministic_markets"]),
+            risk_per_trade_pct=_optional_float(data.get("risk_per_trade_pct")),
+            max_position_pct=_optional_float(data.get("max_position_pct")),
+            max_position_usd=_optional_float(data.get("max_position_usd")),
+            bankroll_floor_for_live=_optional_float(data.get("bankroll_floor_for_live")),
+            paper_trade_default=bool(data.get("paper_trade_default", False)),
             execution_style=_optional_text(data.get("execution_style")),
         )
     return StrategyProfile(
@@ -460,6 +500,11 @@ def _load_strategy(data: dict[str, Any], name: str) -> StrategyProfile:
         exact_score_max_per_event=int(data["exact_score_max_per_event"]),
         paper_trade_minimum_trades=int(data["paper_trade_minimum_trades"]),
         require_deterministic_markets=bool(data["require_deterministic_markets"]),
+        risk_per_trade_pct=_optional_float(data.get("risk_per_trade_pct")),
+        max_position_pct=_optional_float(data.get("max_position_pct")),
+        max_position_usd=_optional_float(data.get("max_position_usd")),
+        bankroll_floor_for_live=_optional_float(data.get("bankroll_floor_for_live")),
+        paper_trade_default=bool(data.get("paper_trade_default", False)),
         execution_style=_optional_text(data.get("execution_style")),
     )
 
@@ -495,6 +540,10 @@ def _load_signal_rules(data: Any) -> SignalRules | None:
         mode=str(data.get("mode", "certainty")),
         asset_keywords=_to_str_tuple(data.get("asset_keywords")),
         catalyst_keywords=_to_str_tuple(data.get("catalyst_keywords")),
+        catalyst_mode=str(data.get("catalyst_mode", "hard")),
+        catalyst_multiplier_weight=float(data.get("catalyst_multiplier_weight", 0.0)),
+        catalyst_multiplier_cap=float(data.get("catalyst_multiplier_cap", 1.0)),
+        spot_symbols=_to_str_tuple(data.get("spot_symbols")),
         catalyst_time_windows_utc=_to_str_tuple(data.get("catalyst_time_windows_utc")),
         catalyst_provider=str(data.get("catalyst_provider", "trading_economics")),
         catalyst_countries=_to_str_tuple(data.get("catalyst_countries")),

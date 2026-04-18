@@ -32,7 +32,7 @@ def main() -> None:
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
     latest_state = tracker.get_latest_state(strategy_name=runtime.strategy.name) or tracker.get_latest_state()
-    latest_spot = _load_latest_spot_snapshot(tracker, runtime.strategy.signal_mode, runtime.strategy.spot_symbol)
+    latest_spot = _load_latest_spot_snapshot(tracker, runtime)
     latest_catalyst = _load_latest_catalyst_snapshot(tracker, runtime)
     profile_performance = tracker.profile_performance_report()
     autoscale = AutoScaleEngine()
@@ -66,6 +66,7 @@ def main() -> None:
             "signal_mode": runtime.strategy.signal_mode,
             "execution_style": runtime.strategy.execution_style or runtime.execution.execution_style,
             "spot_symbol": runtime.strategy.spot_symbol if runtime.strategy.signal_mode == "momentum" else None,
+            "spot_symbols": list(runtime.strategy.spot_symbols) if runtime.strategy.spot_symbols else None,
             "min_price": runtime.strategy.min_price,
             "max_price": runtime.strategy.max_price,
             "min_score": runtime.strategy.min_score,
@@ -108,6 +109,8 @@ def main() -> None:
         )
     if runtime.strategy.signal_mode == "momentum":
         print(f"strategy.spot_symbol={runtime.strategy.spot_symbol}")
+        if runtime.strategy.spot_symbols:
+            print(f"strategy.spot_symbols={','.join(runtime.strategy.spot_symbols)}")
         print(_spot_line(latest_spot))
         print(_catalyst_line(latest_catalyst))
     print(f"strategy.min_price={runtime.strategy.min_price}")
@@ -115,10 +118,16 @@ def main() -> None:
     print(f"strategy.min_score={runtime.strategy.min_score}")
 
 
-def _load_latest_spot_snapshot(tracker: TradeTracker, signal_mode: str, spot_symbol: str):
-    if signal_mode != "momentum":
+def _load_latest_spot_snapshot(tracker: TradeTracker, runtime):
+    if runtime.strategy.signal_mode != "momentum":
         return None
-    return tracker.get_latest_spot_snapshot(spot_symbol)
+    if runtime.strategy.spot_symbols:
+        snapshots = {
+            symbol: tracker.get_latest_spot_snapshot(symbol)
+            for symbol in runtime.strategy.spot_symbols
+        }
+        return {symbol: snapshot for symbol, snapshot in snapshots.items() if snapshot is not None} or None
+    return tracker.get_latest_spot_snapshot(runtime.strategy.spot_symbol)
 
 
 def _load_latest_catalyst_snapshot(tracker: TradeTracker, runtime):
@@ -130,6 +139,8 @@ def _load_latest_catalyst_snapshot(tracker: TradeTracker, runtime):
 def _spot_payload(snapshot) -> dict[str, object] | None:
     if snapshot is None:
         return None
+    if isinstance(snapshot, dict):
+        return {symbol: item.as_dict() for symbol, item in snapshot.items()}
     return snapshot.as_dict()
 
 
@@ -142,6 +153,12 @@ def _catalyst_payload(snapshot) -> dict[str, object] | None:
 def _spot_line(snapshot) -> str:
     if snapshot is None:
         return "spot_snapshot=none"
+    if isinstance(snapshot, dict):
+        parts = [
+            f"{symbol}:price={item.spot_price:.2f} ret_1h={_format_pct(item.return_1h_pct)} age_seconds={item.age_seconds:.0f}"
+            for symbol, item in snapshot.items()
+        ]
+        return "spot_snapshot=" + " | ".join(parts)
     return (
         "spot_snapshot="
         f"price={snapshot.spot_price:.2f} "

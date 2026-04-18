@@ -73,6 +73,29 @@ def test_runtime_config_loads_btc_up_down_profile() -> None:
     assert config.strategy.momentum_price_width == 0.1
 
 
+def test_runtime_config_loads_hourly_momentum_multi_asset_profile() -> None:
+    config = load_runtime_config(ROOT / "config.yaml", strategy_section="hourly_momentum_multi_asset")
+    assert config.strategy.min_price == 0.4
+    assert config.strategy.max_price == 0.6
+    assert config.strategy.signal_mode == "momentum"
+    assert config.strategy.execution_style == "taker"
+    assert config.strategy.paper_trade_default is True
+    assert config.strategy.risk_per_trade_pct == 0.015
+    assert config.strategy.max_position_pct == 0.02
+    assert config.strategy.max_position_usd == 3.0
+    assert config.strategy.bankroll_floor_for_live == 20.0
+    assert config.strategy.catalyst_mode == "soft_boost"
+    assert config.strategy.catalyst_multiplier_weight == 0.18
+    assert config.strategy.catalyst_multiplier_cap == 1.3
+    assert config.strategy.spot_symbols == ("xbtusd", "ethusd", "solusd")
+    assert config.strategy.spot_symbol == "XBTUSD"
+    assert config.strategy.spot_max_age_seconds == 90
+    assert config.strategy.momentum_min_abs_volume_change_1h_pct == 8.0
+    assert config.strategy.momentum_min_abs_one_hour_price_change == 0.004
+    assert config.strategy.momentum_price_center == 0.5
+    assert config.strategy.momentum_price_width == 0.22
+
+
 def test_environment_loads_from_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
