@@ -8,6 +8,7 @@ from bot.config import AIScoringConfig, load_runtime_config
 from bot.ranker import RankedMarket
 from bot.supervisor import (
     PreparedCycle,
+    TradeQuotaState,
     determine_live_budget_ceiling,
     determine_live_budget,
     distinct_scored_candidates,
@@ -218,6 +219,44 @@ def test_run_supervised_cycle_stops_on_profile_control(tmp_path, monkeypatch) ->
     )
     monkeypatch.setattr(tracker, "record_state", lambda state: 99)
     monkeypatch.setattr("bot.supervisor.send_optional_alert", lambda *args, **kwargs: None)
+
+
+def test_run_supervised_cycle_halts_when_trade_quota_is_reached(tmp_path, monkeypatch) -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset_stress")
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'quota.db'}")
+    tracker.initialize()
+
+    async_results = iter([[], None, None])
+
+    def fake_asyncio_run(coro):
+        try:
+            return next(async_results)
+        finally:
+            coro.close()
+
+    monkeypatch.setattr("bot.supervisor.asyncio.run", fake_asyncio_run)
+    monkeypatch.setattr("bot.supervisor.try_auto_exit_position", lambda **kwargs: None)
+    monkeypatch.setattr("bot.supervisor.send_optional_alert", lambda *args, **kwargs: None)
+
+    quota_state = TradeQuotaState(target_trades=50, executed_trades=50)
+
+    result = run_supervised_cycle(
+        env=type("Env", (), {"database_url": tracker.database_url})(),
+        runtime=runtime,
+        tracker=tracker,
+        requested_budget=1.0,
+        limit_price=None,
+        top=5,
+        near_misses=5,
+        submit=True,
+        monitor_seconds=20,
+        poll_interval=2.0,
+        cancel_if_open=False,
+        quota_state=quota_state,
+    )
+
+    assert result.execution_status == "STOPPED"
+    assert result.prepared.skip_reason and "Trade quota reached" in result.prepared.skip_reason
 
     @contextmanager
     def fake_lock(*args, **kwargs):

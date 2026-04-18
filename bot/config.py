@@ -84,6 +84,8 @@ class StrategyProfile:
     bankroll_floor_for_live: float | None = None
     paper_trade_default: bool = False
     execution_style: str | None = None
+    trade_quota_target_trades: int | None = None
+    trade_quota_stop_after_trades: bool = False
 
     @property
     def min_price(self) -> float:
@@ -287,6 +289,14 @@ class StrategyProfile:
             return None
         return self.signal_rules.momentum_price_width
 
+    @property
+    def trade_quota_enabled(self) -> bool:
+        return bool(
+            self.trade_quota_target_trades is not None
+            and self.trade_quota_target_trades > 0
+            and self.trade_quota_stop_after_trades
+        )
+
 
 @dataclass(frozen=True)
 class SizingConfig:
@@ -488,6 +498,8 @@ def _load_strategy(data: dict[str, Any], name: str) -> StrategyProfile:
             bankroll_floor_for_live=_optional_float(data.get("bankroll_floor_for_live")),
             paper_trade_default=bool(data.get("paper_trade_default", False)),
             execution_style=_optional_text(data.get("execution_style")),
+            trade_quota_target_trades=_optional_int(data.get("trade_quota_target_trades")),
+            trade_quota_stop_after_trades=bool(data.get("trade_quota_stop_after_trades", False)),
         )
     return StrategyProfile(
         name=name,
@@ -533,6 +545,8 @@ def _load_strategy(data: dict[str, Any], name: str) -> StrategyProfile:
         bankroll_floor_for_live=_optional_float(data.get("bankroll_floor_for_live")),
         paper_trade_default=bool(data.get("paper_trade_default", False)),
         execution_style=_optional_text(data.get("execution_style")),
+        trade_quota_target_trades=_optional_int(data.get("trade_quota_target_trades")),
+        trade_quota_stop_after_trades=bool(data.get("trade_quota_stop_after_trades", False)),
     )
 
 

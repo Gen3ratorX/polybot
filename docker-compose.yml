@@ -10,6 +10,8 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/bot.db
       PYTHONUNBUFFERED: "1"
+      STRATEGY_SECTION: ${STRATEGY_SECTION:-late_market_edge}
+      REQUESTED_BUDGET_USDC: ${REQUESTED_BUDGET_USDC:-}
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro

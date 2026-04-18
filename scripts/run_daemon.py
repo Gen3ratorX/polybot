@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from bot.logging_utils import configure_cli_logging
 
 
 def parse_args() -> argparse.Namespace:
+    default_strategy_section = os.getenv("STRATEGY_SECTION", "late_market_edge")
+    requested_budget_env = os.getenv("REQUESTED_BUDGET_USDC")
+    default_requested_budget = None if requested_budget_env in (None, "") else float(requested_budget_env)
     parser = argparse.ArgumentParser(
         description="Run the long-lived supervised Polybot daemon."
     )
@@ -24,7 +28,7 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="How many cycles to run. Use 0 for an infinite daemon loop.",
     )
-    parser.add_argument("--budget-usdc", type=float, default=None)
+    parser.add_argument("--budget-usdc", type=float, default=default_requested_budget)
     parser.add_argument("--price", type=float, default=None)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--near-misses", type=int, default=5)
@@ -40,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy-section",
-        default="late_market_edge",
+        default=default_strategy_section,
         help="Which strategy profile to use. Defaults to late_market_edge.",
     )
     return parser.parse_args()

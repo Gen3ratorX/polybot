@@ -101,6 +101,16 @@ def test_runtime_config_loads_hourly_momentum_multi_asset_profile() -> None:
     assert config.strategy.spot_min_contract_lag_pct == 0.0025
 
 
+def test_runtime_config_loads_hourly_momentum_multi_asset_stress_profile() -> None:
+    config = load_runtime_config(ROOT / "config.yaml", strategy_section="hourly_momentum_multi_asset_stress")
+    assert config.strategy.name == "hourly_momentum_multi_asset_stress"
+    assert config.strategy.paper_trade_default is False
+    assert config.strategy.max_position_usd == 1.0
+    assert config.strategy.max_position_pct == 0.05
+    assert config.strategy.trade_quota_target_trades == 50
+    assert config.strategy.trade_quota_stop_after_trades is True
+
+
 def test_environment_loads_from_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

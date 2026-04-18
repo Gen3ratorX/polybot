@@ -7,7 +7,7 @@ from typing import Callable
 from bot.autoscale import AutoScaleEngine
 from bot.config import EnvironmentConfig, RuntimeConfig
 from bot.runtime_state import send_optional_alert
-from bot.supervisor import ExecutedCycle, run_supervised_cycle
+from bot.supervisor import ExecutedCycle, TradeQuotaState, run_supervised_cycle
 from bot.tracker import TradeTracker
 
 
@@ -62,6 +62,11 @@ def run_daemon(
 
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
+    quota_state = (
+        TradeQuotaState(target_trades=runtime.strategy.trade_quota_target_trades or 0)
+        if runtime.strategy.trade_quota_enabled
+        else None
+    )
     if tracker.get_runtime_setting(SUBMIT_ENABLED_SETTING_KEY) is None:
         tracker.upsert_runtime_setting(
             SUBMIT_ENABLED_SETTING_KEY,
@@ -96,6 +101,7 @@ def run_daemon(
                 monitor_seconds=monitor_seconds,
                 poll_interval=poll_interval,
                 cancel_if_open=cancel_if_open,
+                quota_state=quota_state,
             )
             sleep_seconds = compute_daemon_sleep_seconds(
                 tracker,

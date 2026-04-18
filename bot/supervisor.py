@@ -149,6 +149,16 @@ class ExecutedCycle:
         return payload
 
 
+@dataclass
+class TradeQuotaState:
+    target_trades: int
+    executed_trades: int = 0
+
+    @property
+    def reached(self) -> bool:
+        return self.executed_trades >= self.target_trades
+
+
 def determine_live_budget_ceiling(
     *,
     bankroll: float,
@@ -884,11 +894,14 @@ def run_supervised_loop(
     monitor_seconds: int,
     poll_interval: float,
     cancel_if_open: bool,
+    quota_state: TradeQuotaState | None = None,
 ) -> list[ExecutedCycle]:
     if cycles <= 0:
         raise ValueError("cycles must be positive")
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
+    if quota_state is None and runtime.strategy.trade_quota_enabled:
+        quota_state = TradeQuotaState(target_trades=runtime.strategy.trade_quota_target_trades or 0)
     results: list[ExecutedCycle] = []
     for index in range(cycles):
         results.append(
@@ -904,6 +917,7 @@ def run_supervised_loop(
                 monitor_seconds=monitor_seconds,
                 poll_interval=poll_interval,
                 cancel_if_open=cancel_if_open,
+                quota_state=quota_state,
             )
         )
         if index < cycles - 1:
@@ -924,6 +938,7 @@ def run_supervised_cycle(
     monitor_seconds: int,
     poll_interval: float,
     cancel_if_open: bool,
+    quota_state: TradeQuotaState | None = None,
 ) -> ExecutedCycle:
     with acquire_database_lock(env.database_url):
         control = tracker.resolve_control_state(runtime.strategy.name)
@@ -1090,6 +1105,95 @@ def run_supervised_cycle(
                         "signal_to_submit_seconds": None,
                     },
                 )
+        if quota_state is not None and quota_state.reached:
+            open_orders = tracker.open_order_count(strategy_name=runtime.strategy.name)
+            open_positions = tracker.open_position_count(strategy_name=runtime.strategy.name)
+            latest_state_for_quota = tracker.get_latest_state(strategy_name=runtime.strategy.name) or tracker.get_latest_state()
+            quota_reason = (
+                f"Trade quota reached ({quota_state.executed_trades}/{quota_state.target_trades}); "
+                "draining open positions before shutdown."
+            )
+            draining_state = tracker.build_state_snapshot(
+                bankroll=0.0 if latest_state_for_quota is None else latest_state_for_quota.bankroll,
+                phase=0 if latest_state_for_quota is None else latest_state_for_quota.phase,
+                strategy_min_price=runtime.strategy.min_price,
+                strategy_min_score=runtime.strategy.min_score,
+                strategy_name=runtime.strategy.name,
+                open_orders=open_orders,
+                open_positions=open_positions,
+                is_paused=True,
+                pause_level="SYSTEM",
+                pause_reason=quota_reason,
+                pause_until=None,
+            )
+            draining_state_id = tracker.record_state(draining_state)
+            if open_orders == 0 and open_positions == 0:
+                tracker.upsert_control_state(
+                    profile_name=runtime.strategy.name,
+                    desired_state="STOPPED",
+                    run_once_pending=0,
+                    notes="Trade quota reached and profile drained",
+                )
+                prepared = PreparedCycle(
+                    state_id=draining_state_id,
+                    bankroll=draining_state.bankroll,
+                    phase=draining_state.phase,
+                    budget_cap=0.0,
+                    selected_budget=0.0,
+                    kill_signal=None,
+                    skip_reason=quota_reason,
+                    reconciled_positions=(),
+                    top_candidates=(),
+                    near_miss_candidates=(),
+                    preview=None,
+                )
+                return ExecutedCycle(
+                    prepared=prepared,
+                    submit_response=None,
+                    cancel_response=None,
+                    final_order_status=None,
+                    tracked_trade_id=None,
+                    position_id=None,
+                    trade_outcome=None,
+                    state_id=draining_state_id,
+                    exit_result=None,
+                    execution_status="STOPPED",
+                    timing={
+                        "spot_fetch_latency_seconds": _spot_latency_summary(spot_snapshot),
+                        "catalyst_fetch_latency_seconds": catalyst_snapshot.fetch_latency_seconds if catalyst_snapshot is not None else None,
+                        "signal_to_submit_seconds": None,
+                    },
+                )
+            prepared = PreparedCycle(
+                state_id=draining_state_id,
+                bankroll=draining_state.bankroll,
+                phase=draining_state.phase,
+                budget_cap=0.0,
+                selected_budget=0.0,
+                kill_signal=None,
+                skip_reason=quota_reason,
+                reconciled_positions=(),
+                top_candidates=(),
+                near_miss_candidates=(),
+                preview=None,
+            )
+            return ExecutedCycle(
+                prepared=prepared,
+                submit_response=None,
+                cancel_response=None,
+                final_order_status=None,
+                tracked_trade_id=None,
+                position_id=None,
+                trade_outcome=None,
+                state_id=draining_state_id,
+                exit_result=None,
+                execution_status="QUOTA_HOLD",
+                timing={
+                    "spot_fetch_latency_seconds": _spot_latency_summary(spot_snapshot),
+                    "catalyst_fetch_latency_seconds": catalyst_snapshot.fetch_latency_seconds if catalyst_snapshot is not None else None,
+                    "signal_to_submit_seconds": None,
+                },
+            )
 
         prepared = asyncio.run(
             prepare_supervised_cycle(
@@ -1105,7 +1209,7 @@ def run_supervised_cycle(
             )
         )
         if submit:
-            return execute_prepared_cycle(
+            result = execute_prepared_cycle(
                 prepared=prepared,
                 env=env,
                 runtime=runtime,
@@ -1116,6 +1220,9 @@ def run_supervised_cycle(
                 poll_interval=poll_interval,
                 cancel_if_open=cancel_if_open,
             )
+            if quota_state is not None and result.tracked_trade_id is not None:
+                quota_state.executed_trades += 1
+            return result
         return ExecutedCycle(
             prepared=prepared,
             submit_response=None,
