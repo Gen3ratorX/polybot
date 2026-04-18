@@ -20,9 +20,16 @@ class ControlMutationResult:
 
 
 class ControlService:
-    def __init__(self, tracker: TradeTracker, database_url: str) -> None:
+    def __init__(
+        self,
+        tracker: TradeTracker,
+        database_url: str,
+        *,
+        configured_profiles: tuple[str, ...] | None = None,
+    ) -> None:
         self.tracker = tracker
         self.database_url = database_url
+        self.configured_profiles = tuple(name for name in (configured_profiles or ()) if str(name).strip())
 
     def list_profiles(self) -> tuple[str, ...]:
         observed = {
@@ -31,6 +38,7 @@ class ControlService:
             if row["strategy_name"] not in (None, "unassigned")
         }
         observed.update(KNOWN_PROFILES)
+        observed.update(self.configured_profiles)
         return tuple(sorted(observed))
 
     def get_global_status(self) -> dict[str, object]:
@@ -208,4 +216,3 @@ class ControlService:
             else:
                 raise ValueError(f"Unsupported profile command: {command}")
         return ControlMutationResult(True, normalized, "PROFILE", profile_name, self.render_profile_status(profile_name))
-

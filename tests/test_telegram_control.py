@@ -30,6 +30,7 @@ def _message(text: str) -> TelegramMessage:
 def test_parse_command_supports_profile_and_global_commands() -> None:
     assert parse_command(_message("/status")) == ("status", None)
     assert parse_command(_message("/pause late_market_edge")) == ("pause", "late_market_edge")
+    assert parse_command(_message("/help")) == ("help", None)
     assert parse_command(_message("hello")) == (None, None)
 
 
@@ -51,6 +52,12 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
         profile_name="late_market_edge",
         message=_message("/pause late_market_edge"),
     )
+    help_result = await router.route_command(
+        client,
+        command="help",
+        profile_name=None,
+        message=_message("/help"),
+    )
     run_once_result = await router.route_command(
         client,
         command="run_once",
@@ -71,6 +78,7 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
     global_control = tracker.get_control_state(None)
 
     assert pause_result.handled is True
+    assert help_result.handled is True
     assert run_once_result.handled is True
     assert profile_control is not None
     assert profile_control_before_stop is not None
@@ -81,5 +89,6 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
     assert global_control is not None
     assert global_control.desired_state == "STOPPED"
     assert client.sent
+    assert any("Polybot Telegram commands:" in text for _, text in client.sent)
     assert any("Profile status: late_market_edge" in text for _, text in client.sent)
     assert any("Global control status:" in text for _, text in client.sent)

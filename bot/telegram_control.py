@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from api.telegram import TelegramBotClient, TelegramMessage, TelegramUpdate
 from bot.control_service import ControlMutationResult, ControlService
-from bot.config import EnvironmentConfig
+from bot.config import EnvironmentConfig, load_profile_names
 from bot.runtime_state import send_optional_alert
 from bot.tracker import TradeTracker
 
@@ -20,10 +20,21 @@ class TelegramCommandResult:
 
 
 class TelegramCommandRouter:
-    def __init__(self, *, env: EnvironmentConfig, tracker: TradeTracker) -> None:
+    def __init__(
+        self,
+        *,
+        env: EnvironmentConfig,
+        tracker: TradeTracker,
+        configured_profiles: tuple[str, ...] | None = None,
+    ) -> None:
         self.env = env
         self.tracker = tracker
-        self.service = ControlService(tracker, env.database_url)
+        self.configured_profiles = tuple(configured_profiles or load_profile_names())
+        self.service = ControlService(
+            tracker,
+            env.database_url,
+            configured_profiles=self.configured_profiles,
+        )
 
     async def run(self, *, poll_interval_seconds: float = 5.0) -> None:
         if not self.env.telegram_token or not self.env.telegram_chat_id:
@@ -84,6 +95,11 @@ class TelegramCommandRouter:
                 notes="Telegram stop_all",
             )
             response = result.response
+            await client.send_message(message.chat_id, response)
+            return TelegramCommandResult(True, command, "GLOBAL", None, response)
+
+        if command in {"help", "commands"} and profile_name is None:
+            response = self._help_message()
             await client.send_message(message.chat_id, response)
             return TelegramCommandResult(True, command, "GLOBAL", None, response)
 
@@ -152,13 +168,41 @@ class TelegramCommandRouter:
         if command in GLOBAL_COMMANDS:
             return (
                 "Unknown or incomplete global command.\n"
-                "Use: /status | /pause | /resume | /stop_all"
+                "Use: /status | /pause | /resume | /stop_all | /help"
             )
         return (
             "Unknown or incomplete profile command.\n"
             "Use: /status <profile> | /pause <profile> | /resume <profile> | "
             "/run_once <profile> | /start <profile> | /stop <profile>"
         )
+
+    def _help_message(self) -> str:
+        profiles = self.service.list_profiles()
+        lines = [
+            "Polybot Telegram commands:",
+            "",
+            "Global:",
+            "/status - show overall bot state and all profiles",
+            "/pause - pause all profiles",
+            "/resume - resume all profiles",
+            "/stop_all - stop everything cleanly",
+            "",
+            "Per-profile:",
+        ]
+        for profile in profiles:
+            lines.extend(
+                [
+                    f"/status {profile}",
+                    f"/pause {profile}",
+                    f"/resume {profile}",
+                    f"/run_once {profile}",
+                    f"/start {profile}",
+                    f"/stop {profile}",
+                    "",
+                ]
+            )
+        lines.append("Use a profile name to target only that strategy.")
+        return "\n".join(lines).rstrip()
 
 
 def parse_command(message: TelegramMessage) -> tuple[str | None, str | None]:
@@ -167,7 +211,7 @@ def parse_command(message: TelegramMessage) -> tuple[str | None, str | None]:
         return None, None
     parts = text.strip().split()
     command = parts[0].lstrip("/").split("@", 1)[0].lower()
-    if command == "stop_all":
+    if command in {"stop_all", "help", "commands"}:
         return command, None
     if len(parts) >= 2:
         return command, parts[1].strip()
