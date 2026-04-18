@@ -10,6 +10,7 @@ from bot.paper import PaperExecutionSimulator, PaperFillMode, PaperTradingEngine
 from bot.ranker import EdgeRanker
 from bot.risk import RiskManager
 from bot.tracker import TradeTracker
+from api.spot import SpotSnapshot
 from models import Market
 from scripts.paper_trade import _paper_runtime, _paper_settlement_delay_minutes, _paper_strategy_name
 
@@ -158,6 +159,70 @@ async def test_paper_trading_engine_forwards_spot_and_catalyst_snapshots(tmp_pat
     assert scanner.calls == 1
     assert scanner.last_spot_snapshot == spot_snapshot
     assert scanner.last_catalyst_snapshot == catalyst_snapshot
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_engine_emits_open_position_alert(tmp_path) -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    paper_runtime = _paper_runtime(runtime)
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'paper-alert.db'}")
+    tracker.initialize()
+    scanner = SpotAwareStubScanner(
+        Market(
+            market_id="paper-alert-market",
+            condition_id="cond-paper-alert-market",
+            question="Ethereum Up or Down - April 6, 12PM ET",
+            slug="ethereum-up-or-down-april-6-12pm-et",
+            end_date=datetime(2026, 4, 6, 15, 0, tzinfo=UTC),
+            yes_token_id="yes-paper-alert",
+            no_token_id="no-paper-alert",
+            yes_price=0.55,
+            no_price=0.45,
+            volume=5_000,
+            category="crypto",
+            volume_change_1h_pct=16.0,
+            one_hour_price_change=0.02,
+            liquidity=12_000.0,
+        )
+    )
+    alerts: list[str] = []
+    engine = PaperTradingEngine(
+        scanner=scanner,
+        ranker=EdgeRanker(paper_runtime.strategy),
+        tracker=tracker,
+        risk_manager=RiskManager(),
+        initial_bankroll=20.0,
+        trade_size_usd=1.0,
+        strategy_name="hourly_momentum_multi_asset",
+        resolver=lambda ranked_market: 1.0,
+        execution_simulator=PaperExecutionSimulator(mode=PaperFillMode.FULL_FILL),
+        settlement_delay_minutes=1,
+        open_position_alert=alerts.append,
+    )
+
+    await engine.run_cycle(
+        as_of=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+        spot_snapshot={
+            "ETHUSD": SpotSnapshot(
+                symbol="ETHUSD",
+                pair="ETHUSD",
+                spot_price=3200.0,
+                return_15m_pct=0.01,
+                return_1h_pct=0.02,
+                fetch_latency_seconds=0.01,
+                observed_at=datetime(2026, 4, 6, 11, 59, tzinfo=UTC),
+                age_seconds=0.0,
+            ),
+        },
+        catalyst_snapshot=None,
+    )
+
+    assert len(alerts) == 1
+    assert "PAPER POSITION OPENED" in alerts[0]
+    assert "Asset:" in alerts[0]
+    assert "Direction:" in alerts[0]
+    assert "Entry price:" in alerts[0]
+    assert "Market: https://polymarket.com/event/" in alerts[0]
 
 
 @pytest.mark.asyncio

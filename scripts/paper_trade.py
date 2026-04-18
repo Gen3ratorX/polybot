@@ -18,6 +18,7 @@ from bot.config import load_environment, load_runtime_config
 from bot.paper import PaperTradingEngine
 from bot.ranker import EdgeRanker
 from bot.risk import RiskManager
+from bot.runtime_state import send_optional_alert
 from bot.scanner import MarketScanner
 from bot.spot import load_active_spot_snapshot, load_active_spot_snapshots
 from bot.tracker import TradeTracker
@@ -78,6 +79,7 @@ async def main() -> None:
             strategy_name=paper_runtime.strategy.name,
             settlement_delay_minutes=_paper_settlement_delay_minutes(paper_runtime),
             session_id=session_id,
+            open_position_alert=lambda message: send_optional_alert(env, message, level="INFO", dedupe_window_seconds=0.0),
         )
         current = datetime.now(UTC)
         state = engine.state

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from uuid import uuid4
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
 from bot.ranker import EdgeRanker, RankedMarket
@@ -111,6 +112,7 @@ class PaperTradingEngine:
         execution_simulator: PaperExecutionSimulator | None = None,
         settlement_delay_minutes: int = 0,
         session_id: str | None = None,
+        open_position_alert: Callable[[str], object] | None = None,
     ) -> None:
         if initial_bankroll <= 0:
             raise ValueError("initial_bankroll must be positive")
@@ -130,6 +132,7 @@ class PaperTradingEngine:
         self.resolver = resolver or default_resolver
         self.execution_simulator = execution_simulator or PaperExecutionSimulator()
         self.settlement_delay_minutes = settlement_delay_minutes
+        self.open_position_alert = open_position_alert
         self._open_positions: dict[str, _PaperOpenPosition] = {}
         self.state = BotState(
             timestamp=start,
@@ -278,6 +281,13 @@ class PaperTradingEngine:
                 session_id=self.session_id,
             )
             self.tracker.upsert_position(open_position)
+            if self.open_position_alert is not None:
+                self.open_position_alert(
+                    _paper_open_position_alert_message(
+                        position=open_position,
+                        market=selected.market,
+                    )
+                )
             if self.settlement_delay_minutes <= 0:
                 settled_trade, closed_position = _paper_trade_from_position(
                     position=open_position,
@@ -472,3 +482,38 @@ def _paper_trade_from_position(
 
 def _paper_order_id(market_id: str, timestamp: datetime) -> str:
     return f"paper-{market_id}-{int(timestamp.timestamp())}-{uuid4().hex[:8]}"
+
+
+def _paper_open_position_alert_message(*, position: Position, market: Market) -> str:
+    asset = _paper_market_asset(market)
+    url = _paper_market_url(market)
+    direction = position.side.value
+    return (
+        "PAPER POSITION OPENED\n"
+        f"Strategy: {position.strategy_name or 'unknown'}\n"
+        f"Asset: {asset}\n"
+        f"Direction: {direction}\n"
+        f"Entry price: ${position.fill_price:.3f}\n"
+        f"Cost basis: ${position.cost_basis:.2f}\n"
+        f"Market: {url}"
+    )
+
+
+def _paper_market_asset(market: Market) -> str:
+    text = " ".join(
+        field for field in (market.question, market.slug, market.event_slug, market.event_title, market.category) if field
+    ).lower()
+    if re.search(r"\b(bitcoin|btc)\b", text):
+        return "BTC"
+    if re.search(r"\b(ethereum|eth)\b", text):
+        return "ETH"
+    if re.search(r"\b(solana|sol)\b", text):
+        return "SOL"
+    return market.category.upper() if market.category else "UNKNOWN"
+
+
+def _paper_market_url(market: Market) -> str:
+    slug = market.slug or market.event_slug
+    if slug:
+        return f"https://polymarket.com/event/{slug}"
+    return f"https://polymarket.com/market/{market.market_id}"

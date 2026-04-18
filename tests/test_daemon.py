@@ -12,6 +12,7 @@ from bot.tracker import TradeTracker
 @dataclass(frozen=True, slots=True)
 class DummyEnv:
     database_url: str
+    paper_trade: bool = False
 
 
 def test_compute_daemon_sleep_seconds_uses_latest_bankroll_when_no_override(tmp_path) -> None:
@@ -86,3 +87,55 @@ def test_run_daemon_executes_bounded_cycles_and_uses_override_sleep(tmp_path, mo
     assert sleeps == [1.5]
     assert len(calls) == 2
     assert len(alerts) == 2
+
+
+def test_run_daemon_disables_submit_in_paper_mode(tmp_path, monkeypatch) -> None:
+    env = DummyEnv(database_url=f"sqlite:///{tmp_path / 'daemon-paper.db'}", paper_trade=True)
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset_stress")
+    submits: list[bool] = []
+
+    monkeypatch.setattr("bot.daemon.send_optional_alert", lambda env, message, level='INFO': None)
+
+    def fake_cycle_runner(**kwargs):
+        submits.append(bool(kwargs["submit"]))
+        return ExecutedCycle(
+            prepared=PreparedCycle(
+                state_id=1,
+                bankroll=10.0,
+                phase=0,
+                budget_cap=0.0,
+                selected_budget=0.0,
+                kill_signal=None,
+                skip_reason="skip",
+                reconciled_positions=(),
+                top_candidates=(),
+                near_miss_candidates=(),
+                preview=None,
+            ),
+            submit_response=None,
+            cancel_response=None,
+            final_order_status=None,
+            tracked_trade_id=None,
+            position_id=None,
+            trade_outcome=None,
+            state_id=None,
+        )
+
+    run_daemon(
+        env=env,  # type: ignore[arg-type]
+        runtime=runtime,
+        cycles=1,
+        requested_budget=None,
+        limit_price=None,
+        top=5,
+        near_misses=5,
+        submit=True,
+        monitor_seconds=20,
+        poll_interval=2.0,
+        cancel_if_open=False,
+        sleep_override_seconds=0.0,
+        sleeper=lambda _: None,
+        cycle_runner=fake_cycle_runner,
+    )
+
+    assert submits == [False]

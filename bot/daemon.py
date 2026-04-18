@@ -67,13 +67,14 @@ def run_daemon(
         if runtime.strategy.trade_quota_enabled
         else None
     )
+    paper_only = bool(env.paper_trade)
     if tracker.get_runtime_setting(SUBMIT_ENABLED_SETTING_KEY) is None:
         tracker.upsert_runtime_setting(
             SUBMIT_ENABLED_SETTING_KEY,
-            "true" if submit else "false",
+            "false" if paper_only else ("true" if submit else "false"),
             updated_by="daemon",
             last_command="/daemon_start",
-            notes="Daemon startup submit default",
+            notes="Daemon startup submit default" if not paper_only else "Paper mode forces submit disabled",
         )
     results: list[DaemonCycle] = []
     send_optional_alert(
@@ -88,7 +89,7 @@ def run_daemon(
     completed = 0
     try:
         while cycles is None or completed < cycles:
-            effective_submit = _resolve_submit_enabled(tracker, default_submit=submit)
+            effective_submit = False if paper_only else _resolve_submit_enabled(tracker, default_submit=submit)
             executed = cycle_runner(
                 env=env,
                 runtime=runtime,
