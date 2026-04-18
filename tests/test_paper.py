@@ -241,8 +241,10 @@ async def test_paper_trading_engine_delays_settlement_for_momentum_profiles(tmp_
     assert second.trade is not None
     assert tracker.trade_count(strategy_name="hourly_momentum_multi_asset") == 1
     assert tracker.open_position_count(strategy_name="hourly_momentum_multi_asset") == 0
+    assert tracker.open_order_count(strategy_name="hourly_momentum_multi_asset") == 0
     assert latest_state is not None
     assert latest_state.open_positions == 0
+    assert latest_state.open_orders == 0
     assert latest_state.total_trades == 1
     assert latest_state.bankroll > 20.0
 

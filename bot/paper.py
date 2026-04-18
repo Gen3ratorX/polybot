@@ -344,6 +344,19 @@ class PaperTradingEngine:
             strategy_name=self.strategy_name,
         )
         self.tracker.upsert_position(closed_position, notes=f"paper_close_order_id={open_position.order_id}")
+        self.tracker.close_order(
+            order_id=open_position.order_id,
+            strategy_name=self.strategy_name,
+            status="EXPIRED",
+            last_seen_status="EXPIRED",
+            last_seen_at=timestamp,
+            filled_size=open_position.position.cost_basis,
+            exchange_payload={
+                "paper_settlement_delay_minutes": self.settlement_delay_minutes,
+                "closed_at": timestamp.isoformat(),
+                "entry_market_id": open_position.entry_market.market_id,
+            },
+        )
         del self._open_positions[due_market_id]
         bankroll_delta = closed_position.shares * exit_price
         return settled_trade, bankroll_delta
