@@ -8,6 +8,8 @@ from typing import Protocol
 
 from bot.ranker import EdgeRanker, RankedMarket
 from bot.risk import KillSignal, RiskManager
+from api.catalyst import CatalystSnapshot
+from api.spot import SpotSnapshot
 from bot.tracker import TradeTracker
 from models import BotState, Trade
 
@@ -121,7 +123,13 @@ class PaperTradingEngine:
             strategy_name=strategy_name,
         )
 
-    async def run_cycle(self, *, as_of: datetime | None = None) -> PaperTradeCycleResult:
+    async def run_cycle(
+        self,
+        *,
+        as_of: datetime | None = None,
+        spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
+        catalyst_snapshot: CatalystSnapshot | None = None,
+    ) -> PaperTradeCycleResult:
         timestamp = as_of or datetime.now(UTC)
         current_state = replace(self.state, timestamp=timestamp)
 
@@ -142,7 +150,16 @@ class PaperTradingEngine:
             self.state = paused_state
             return PaperTradeCycleResult(trade=None, kill_signal=kill_signal, state=paused_state)
 
-        candidates = await self.scanner.scan(as_of=timestamp)
+        try:
+            candidates = await self.scanner.scan(
+                as_of=timestamp,
+                spot_snapshot=spot_snapshot,
+                catalyst_snapshot=catalyst_snapshot,
+            )
+        except TypeError as exc:
+            if "spot_snapshot" not in str(exc) and "catalyst_snapshot" not in str(exc):
+                raise
+            candidates = await self.scanner.scan(as_of=timestamp)
         ranked = self.ranker.rank_markets(candidates, as_of=timestamp)
         if not ranked:
             self.state = current_state

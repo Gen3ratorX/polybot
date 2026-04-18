@@ -98,6 +98,7 @@ def test_runtime_config_loads_hourly_momentum_multi_asset_profile() -> None:
     assert config.strategy.momentum_min_abs_one_hour_price_change == 0.004
     assert config.strategy.momentum_price_center == 0.5
     assert config.strategy.momentum_price_width == 0.22
+    assert config.strategy.spot_min_contract_lag_pct == 0.0025
 
 
 def test_environment_loads_from_env_file(tmp_path: Path) -> None:

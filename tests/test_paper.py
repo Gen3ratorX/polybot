@@ -10,6 +10,7 @@ from bot.ranker import EdgeRanker
 from bot.risk import RiskManager
 from bot.tracker import TradeTracker
 from models import Market
+from scripts.paper_trade import _paper_runtime
 
 
 class StubScanner:
@@ -19,6 +20,26 @@ class StubScanner:
 
     async def scan(self, *, as_of: datetime | None = None) -> list[Market]:
         self.calls += 1
+        return [self.market]
+
+
+class SpotAwareStubScanner:
+    def __init__(self, market: Market) -> None:
+        self.market = market
+        self.calls = 0
+        self.last_spot_snapshot = None
+        self.last_catalyst_snapshot = None
+
+    async def scan(
+        self,
+        *,
+        as_of: datetime | None = None,
+        spot_snapshot=None,
+        catalyst_snapshot=None,
+    ) -> list[Market]:
+        self.calls += 1
+        self.last_spot_snapshot = spot_snapshot
+        self.last_catalyst_snapshot = catalyst_snapshot
         return [self.market]
 
 
@@ -104,6 +125,61 @@ async def test_paper_trading_engine_records_partial_fill_and_resting_order(tmp_p
     assert latest_state.total_trades == 1
     assert latest_state.open_orders == 1
     assert latest_state.bankroll > 20.0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_engine_forwards_spot_and_catalyst_snapshots(tmp_path) -> None:
+    config = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'paper-snapshots.db'}")
+    tracker.initialize()
+    scanner = SpotAwareStubScanner(_market())
+    engine = PaperTradingEngine(
+        scanner=scanner,
+        ranker=EdgeRanker(config.strategy),
+        tracker=tracker,
+        risk_manager=RiskManager(),
+        initial_bankroll=20.0,
+        trade_size_usd=1.0,
+        strategy_name="hourly_momentum_multi_asset",
+        resolver=lambda ranked_market: 1.0,
+        execution_simulator=PaperExecutionSimulator(mode=PaperFillMode.FULL_FILL),
+    )
+
+    spot_snapshot = {"ETHUSD": object()}
+    catalyst_snapshot = object()
+
+    await engine.run_cycle(
+        as_of=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+        spot_snapshot=spot_snapshot,
+        catalyst_snapshot=catalyst_snapshot,
+    )
+
+    assert scanner.calls == 1
+    assert scanner.last_spot_snapshot == spot_snapshot
+    assert scanner.last_catalyst_snapshot == catalyst_snapshot
+
+
+def test_paper_runtime_relaxes_hourly_momentum_profile() -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    paper_runtime = _paper_runtime(runtime)
+
+    assert runtime.strategy.min_volume == 3000.0
+    assert runtime.strategy.min_liquidity == 8000.0
+    assert runtime.strategy.spot_min_abs_return_1h_pct == 0.004
+    assert runtime.strategy.spot_min_abs_return_15m_pct == 0.0015
+    assert runtime.strategy.spot_min_contract_lag_pct == 0.0025
+    assert runtime.strategy.momentum_min_abs_volume_change_1h_pct == 8.0
+    assert runtime.strategy.momentum_min_abs_one_hour_price_change == 0.004
+
+    assert paper_runtime.strategy.name == "hourly_momentum_multi_asset"
+    assert paper_runtime.strategy.min_volume == 0.0
+    assert paper_runtime.strategy.min_liquidity == 0.0
+    assert paper_runtime.strategy.spot_min_abs_return_1h_pct is None
+    assert paper_runtime.strategy.spot_min_abs_return_15m_pct is None
+    assert paper_runtime.strategy.spot_min_contract_lag_pct is None
+    assert paper_runtime.strategy.momentum_min_abs_volume_change_1h_pct is None
+    assert paper_runtime.strategy.momentum_min_abs_one_hour_price_change is None
+    assert paper_runtime.strategy.min_score == 3.5
 
 
 def _market() -> Market:
