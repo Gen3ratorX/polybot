@@ -60,6 +60,8 @@ def test_runtime_config_loads_btc_up_down_profile() -> None:
     assert config.strategy.execution_style == "taker"
     assert config.strategy.asset_keywords == ("bitcoin", "btc")
     assert config.strategy.spot_symbol == "XBTUSD"
+    assert config.strategy.gamma_tag_slugs == ("crypto",)
+    assert config.strategy.gamma_max_pages == 10
     assert config.strategy.spot_min_abs_return_1h_pct == 0.01
     assert config.strategy.spot_min_abs_return_15m_pct == 0.003
     assert config.strategy.spot_min_contract_lag_pct == 0.005
@@ -84,6 +86,8 @@ def test_runtime_config_loads_hourly_momentum_multi_asset_profile() -> None:
     assert config.strategy.max_position_pct == 0.02
     assert config.strategy.max_position_usd == 3.0
     assert config.strategy.bankroll_floor_for_live == 20.0
+    assert config.strategy.gamma_tag_slugs == ("crypto",)
+    assert config.strategy.gamma_max_pages == 10
     assert config.strategy.catalyst_mode == "soft_boost"
     assert config.strategy.catalyst_multiplier_weight == 0.18
     assert config.strategy.catalyst_multiplier_cap == 1.3

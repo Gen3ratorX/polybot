@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -9,6 +10,8 @@ from api.spot import SpotSnapshot
 from bot.config import StrategyProfile
 from bot.spot import resolve_spot_snapshot_for_market
 from models.market import Market
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +34,43 @@ class MarketScanner:
         spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
     ) -> list[Market]:
-        markets = await self.gamma_client.fetch_all_open_markets()
+        markets = await self.load_markets()
         return self.filter_markets(markets, as_of=as_of, spot_snapshot=spot_snapshot, catalyst_snapshot=catalyst_snapshot)
+
+    async def load_markets(self) -> list[Market]:
+        max_pages = self._gamma_max_pages()
+        if self.config.signal_mode != "momentum":
+            return await self.gamma_client.fetch_all_open_markets(
+                max_pages=max_pages,
+                order="volume_24hr",
+                ascending=False,
+            )
+
+        tag_ids = await self._resolve_gamma_tag_ids()
+        if not tag_ids:
+            return await self.gamma_client.fetch_all_open_markets(
+                max_pages=max_pages,
+                order="volume_24hr",
+                ascending=False,
+            )
+
+        markets_by_id: dict[str, Market] = {}
+        for tag_id in tag_ids:
+            tagged_markets = await self.gamma_client.fetch_all_open_markets(
+                max_pages=max_pages,
+                tag_id=tag_id,
+                order="volume_24hr",
+                ascending=False,
+            )
+            for market in tagged_markets:
+                markets_by_id.setdefault(market.market_id, market)
+        logger.debug(
+            "Loaded %s markets across %s tag filters for profile=%s",
+            len(markets_by_id),
+            len(tag_ids),
+            self.config.name,
+        )
+        return list(markets_by_id.values())
 
     def filter_markets(
         self,
@@ -233,6 +271,33 @@ class MarketScanner:
         if min_price_move is not None:
             if market.one_hour_price_change is None or abs(market.one_hour_price_change) < min_price_move:
                 reasons.append("momentum_price")
+
+    def _gamma_max_pages(self) -> int:
+        configured = self.config.gamma_max_pages
+        if configured is not None and configured > 0:
+            return configured
+        return 10 if self.config.signal_mode == "momentum" else 20
+
+    async def _resolve_gamma_tag_ids(self) -> tuple[str, ...]:
+        slugs = tuple(slug.strip().lower() for slug in self.config.gamma_tag_slugs if slug.strip())
+        if not slugs:
+            return ()
+        resolver = getattr(self.gamma_client, "fetch_tag_by_slug", None)
+        if resolver is None:
+            logger.debug(
+                "Gamma client does not expose fetch_tag_by_slug; skipping tag filters for profile=%s",
+                self.config.name,
+            )
+            return ()
+        resolved: list[str] = []
+        for slug in slugs:
+            payload = await resolver(slug)
+            tag_id = payload.get("id") if isinstance(payload, dict) else None
+            if tag_id is None:
+                logger.debug("Gamma tag slug %s returned no id; skipping", slug)
+                continue
+            resolved.append(str(tag_id))
+        return tuple(resolved)
 
 
 def _within_utc_time_windows(reference: datetime, windows: tuple[str, ...]) -> bool:

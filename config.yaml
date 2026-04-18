@@ -113,6 +113,9 @@ profiles:
       catalyst_arm_after_minutes: 45
       catalyst_refresh_minutes: 30
       catalyst_lookahead_days: 10
+      gamma_tag_slugs:
+        - crypto
+      gamma_max_pages: 10
       spot_symbol: XBTUSD
       spot_min_abs_return_1h_pct: 0.01
       spot_min_abs_return_15m_pct: 0.003
@@ -195,6 +198,9 @@ profiles:
       catalyst_arm_after_minutes: 20
       catalyst_refresh_minutes: 10
       catalyst_lookahead_days: 5
+      gamma_tag_slugs:
+        - crypto
+      gamma_max_pages: 10
       spot_symbols:
         - XBTUSD
         - ETHUSD

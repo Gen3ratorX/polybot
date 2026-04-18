@@ -313,7 +313,7 @@ async def prepare_supervised_cycle(
             clob_client=client,
         )
         scanner = MarketScanner(gamma, runtime.strategy)
-        markets = await gamma.fetch_all_open_markets()
+        markets = await scanner.load_markets()
     risk_manager = RiskManager()
     kill_signal = risk_manager.check_all_kills(state_sync.state)
     if kill_signal is not None:

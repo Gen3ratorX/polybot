@@ -61,7 +61,7 @@ async def main_async(top: int, clusters: int, strategy_section: str) -> dict[str
     catalyst_snapshot = await load_active_catalyst_snapshot(env=env, runtime=runtime, tracker=tracker)
     async with GammaClient() as gamma:
         scanner = MarketScanner(gamma, runtime.strategy)
-        markets = await gamma.fetch_all_open_markets()
+        markets = await scanner.load_markets()
 
     decisions = scanner.diagnose_markets(
         markets,

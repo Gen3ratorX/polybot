@@ -55,6 +55,9 @@ class GammaClient:
         active: bool | None = True,
         closed: bool | None = False,
         archived: bool | None = False,
+        tag_id: str | int | None = None,
+        order: str | None = None,
+        ascending: bool | None = None,
         limit: int = 500,
         offset: int = 0,
     ) -> list[Market]:
@@ -64,6 +67,9 @@ class GammaClient:
                 "active": _as_query_flag(active),
                 "closed": _as_query_flag(closed),
                 "archived": _as_query_flag(archived),
+                "tag_id": tag_id,
+                "order": order,
+                "ascending": _as_query_flag(ascending),
                 "limit": limit,
                 "offset": offset,
             },
@@ -90,20 +96,41 @@ class GammaClient:
             raise GammaAPIError(f"No market found for slug: {slug}")
         return Market.from_gamma_market(payload[0])
 
-    async def fetch_all_open_markets(self, *, page_size: int = 500) -> list[Market]:
+    async def fetch_tag_by_slug(self, slug: str) -> dict[str, object]:
+        payload = await self._get_json(f"/tags/slug/{slug}")
+        if not isinstance(payload, dict):
+            raise GammaAPIError(f"Expected /tags/slug/{{slug}} response to be an object: {slug}")
+        return payload
+
+    async def fetch_all_open_markets(
+        self,
+        *,
+        page_size: int = 500,
+        max_pages: int = 20,
+        tag_id: str | int | None = None,
+        order: str = "volume_24hr",
+        ascending: bool = False,
+    ) -> list[Market]:
         if page_size <= 0:
             raise ValueError("page_size must be positive")
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive")
 
         all_markets: list[Market] = []
         seen_market_ids: set[str] = set()
         offset = 0
+        pages_fetched = 0
 
-        while True:
+        while pages_fetched < max_pages:
             page_started = perf_counter()
             logger.debug(
-                "Gamma fetch_all_open_markets page start offset=%s limit=%s timeout=%.1fs",
+                "Gamma fetch_all_open_markets page start offset=%s limit=%s max_pages=%s tag_id=%s order=%s ascending=%s timeout=%.1fs",
                 offset,
                 page_size,
+                max_pages,
+                tag_id,
+                order,
+                ascending,
                 self._request_timeout_seconds,
             )
             payload = await self._get_json(
@@ -112,6 +139,9 @@ class GammaClient:
                     "active": _as_query_flag(True),
                     "closed": _as_query_flag(False),
                     "archived": _as_query_flag(False),
+                    "tag_id": tag_id,
+                    "order": order,
+                    "ascending": _as_query_flag(ascending),
                     "limit": page_size,
                     "offset": offset,
                 },
@@ -136,6 +166,7 @@ class GammaClient:
                 len(parsed_batch),
                 perf_counter() - page_started,
             )
+            pages_fetched += 1
             if len(payload) < page_size:
                 break
             if not parsed_batch:
@@ -143,6 +174,15 @@ class GammaClient:
             offset += page_size
             if self._page_delay_seconds > 0:
                 await asyncio.sleep(self._page_delay_seconds)
+        else:
+            logger.warning(
+                "Gamma fetch_all_open_markets hit max_pages=%s offset=%s tag_id=%s order=%s ascending=%s",
+                max_pages,
+                offset,
+                tag_id,
+                order,
+                ascending,
+            )
 
         return all_markets
 

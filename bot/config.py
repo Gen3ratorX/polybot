@@ -42,6 +42,8 @@ class SignalRules:
     catalyst_multiplier_weight: float = 0.0
     catalyst_multiplier_cap: float = 1.0
     spot_symbols: tuple[str, ...] = ()
+    gamma_tag_slugs: tuple[str, ...] = ()
+    gamma_max_pages: int | None = None
     catalyst_time_windows_utc: tuple[str, ...] = ()
     catalyst_provider: str = "trading_economics"
     catalyst_countries: tuple[str, ...] = ()
@@ -224,6 +226,18 @@ class StrategyProfile:
         if self.signal_rules is None:
             return ()
         return self.signal_rules.spot_symbols
+
+    @property
+    def gamma_tag_slugs(self) -> tuple[str, ...]:
+        if self.signal_rules is None:
+            return ()
+        return self.signal_rules.gamma_tag_slugs
+
+    @property
+    def gamma_max_pages(self) -> int | None:
+        if self.signal_rules is None:
+            return None
+        return self.signal_rules.gamma_max_pages
 
     @property
     def spot_min_abs_return_1h_pct(self) -> float | None:
@@ -544,6 +558,8 @@ def _load_signal_rules(data: Any) -> SignalRules | None:
         catalyst_multiplier_weight=float(data.get("catalyst_multiplier_weight", 0.0)),
         catalyst_multiplier_cap=float(data.get("catalyst_multiplier_cap", 1.0)),
         spot_symbols=_to_str_tuple(data.get("spot_symbols")),
+        gamma_tag_slugs=_to_str_tuple(data.get("gamma_tag_slugs")),
+        gamma_max_pages=_optional_int(data.get("gamma_max_pages")),
         catalyst_time_windows_utc=_to_str_tuple(data.get("catalyst_time_windows_utc")),
         catalyst_provider=str(data.get("catalyst_provider", "trading_economics")),
         catalyst_countries=_to_str_tuple(data.get("catalyst_countries")),

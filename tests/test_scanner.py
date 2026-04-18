@@ -15,10 +15,17 @@ class StubGammaClient:
     def __init__(self, markets: list[Market]) -> None:
         self.markets = markets
         self.calls = 0
+        self.call_args: list[dict[str, object]] = []
+        self.tag_calls: list[str] = []
 
-    async def fetch_all_open_markets(self) -> list[Market]:
+    async def fetch_all_open_markets(self, **kwargs: object) -> list[Market]:
         self.calls += 1
+        self.call_args.append(kwargs)
         return self.markets
+
+    async def fetch_tag_by_slug(self, slug: str) -> dict[str, object]:
+        self.tag_calls.append(slug)
+        return {"id": f"tag-{slug}", "slug": slug}
 
 
 ROOT_CONFIG = load_runtime_config("config.yaml")
@@ -401,6 +408,53 @@ async def test_scanner_scan_uses_gamma_client() -> None:
 
     assert [market.market_id for market in result] == ["valid"]
     assert client.calls == 1
+    assert client.call_args[0]["max_pages"] == 20
+    assert client.call_args[0]["order"] == "volume_24hr"
+    assert client.call_args[0]["ascending"] is False
+
+
+@pytest.mark.asyncio
+async def test_scanner_scan_uses_gamma_tag_filters_for_hourly_profile() -> None:
+    reference = datetime(2026, 4, 6, 12, 0, tzinfo=UTC)
+    config = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    valid_market = _market(
+        "valid-hourly",
+        end_date=reference + timedelta(minutes=45),
+        yes_price=0.52,
+        no_price=0.48,
+        volume=12_000,
+        category="crypto",
+        liquidity=25_000.0,
+        volume_change_1h_pct=16.0,
+        one_hour_price_change=0.01,
+        question="Will Bitcoin finish the hour above the range?",
+        slug="bitcoin-hourly-range",
+    )
+    client = StubGammaClient([valid_market])
+    scanner = MarketScanner(gamma_client=client, config=config.strategy)
+    spot_snapshots = {
+        "XBTUSD": SpotSnapshot(
+            symbol="XBTUSD",
+            pair="XBTUSD",
+            spot_price=70000.0,
+            return_15m_pct=0.004,
+            return_1h_pct=0.02,
+            fetch_latency_seconds=0.2,
+            observed_at=reference,
+            age_seconds=30.0,
+            source="kraken",
+            payload=None,
+        )
+    }
+
+    result = await scanner.scan(as_of=reference, spot_snapshot=spot_snapshots)
+
+    assert [market.market_id for market in result] == ["valid-hourly"]
+    assert client.tag_calls == ["crypto"]
+    assert client.calls == 1
+    assert client.call_args[0]["tag_id"] == "tag-crypto"
+    assert client.call_args[0]["max_pages"] == 10
+    assert client.call_args[0]["order"] == "volume_24hr"
 
 
 def _market(

@@ -99,6 +99,52 @@ async def test_fetch_all_open_markets_stops_when_full_page_contains_only_duplica
     assert len(session.calls) == 2
 
 
+@pytest.mark.asyncio
+async def test_fetch_all_open_markets_enforces_max_pages_and_sorting() -> None:
+    session = FakeSession(
+        [
+            [
+                _market_payload("1"),
+                _market_payload("2"),
+            ],
+            [
+                _market_payload("3"),
+                _market_payload("4"),
+            ],
+            [
+                _market_payload("5"),
+            ],
+        ]
+    )
+    client = GammaClient(session=session)
+
+    markets = await client.fetch_all_open_markets(page_size=2, max_pages=2, order="volume_24hr", ascending=False)
+
+    assert [market.market_id for market in markets] == ["1", "2", "3", "4"]
+    assert len(session.calls) == 2
+    assert session.calls[0][1]["order"] == "volume_24hr"
+    assert session.calls[0][1]["ascending"] == "false"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tag_by_slug_returns_tag_payload() -> None:
+    session = FakeSession(
+        [
+            {
+                "id": "123",
+                "slug": "crypto",
+                "label": "Crypto",
+            }
+        ]
+    )
+    client = GammaClient(session=session)
+
+    payload = await client.fetch_tag_by_slug("crypto")
+
+    assert payload["id"] == "123"
+    assert session.calls[0][0].endswith("/tags/slug/crypto")
+
+
 def test_market_from_gamma_market_prefers_nested_category_and_volume_fallback() -> None:
     market = Market.from_gamma_market(
         {
