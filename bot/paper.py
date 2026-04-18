@@ -129,6 +129,7 @@ class PaperTradingEngine:
         as_of: datetime | None = None,
         spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
+        blocked_market_ids: set[str] | None = None,
     ) -> PaperTradeCycleResult:
         timestamp = as_of or datetime.now(UTC)
         current_state = replace(self.state, timestamp=timestamp)
@@ -161,6 +162,8 @@ class PaperTradingEngine:
                 raise
             candidates = await self.scanner.scan(as_of=timestamp)
         ranked = self.ranker.rank_markets(candidates, as_of=timestamp)
+        if blocked_market_ids:
+            ranked = [item for item in ranked if item.market.market_id not in blocked_market_ids]
         if not ranked:
             self.state = current_state
             return PaperTradeCycleResult(trade=None, kill_signal=None, state=current_state)
@@ -245,12 +248,13 @@ class PaperTradingEngine:
         cycles: int,
         start_at: datetime | None = None,
         step: timedelta = timedelta(minutes=1),
+        blocked_market_ids: set[str] | None = None,
     ) -> BotState:
         if cycles <= 0:
             raise ValueError("cycles must be positive")
         current = start_at or datetime.now(UTC)
         for _ in range(cycles):
-            result = await self.run_cycle(as_of=current)
+            result = await self.run_cycle(as_of=current, blocked_market_ids=blocked_market_ids)
             if result.kill_signal is not None:
                 break
             current += step

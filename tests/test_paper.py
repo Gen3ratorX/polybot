@@ -159,6 +159,35 @@ async def test_paper_trading_engine_forwards_spot_and_catalyst_snapshots(tmp_pat
     assert scanner.last_catalyst_snapshot == catalyst_snapshot
 
 
+@pytest.mark.asyncio
+async def test_paper_trading_engine_skips_blocked_market_ids(tmp_path) -> None:
+    config = load_runtime_config("config.yaml")
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'paper-blocked.db'}")
+    tracker.initialize()
+    scanner = StubScanner(_market())
+    engine = PaperTradingEngine(
+        scanner=scanner,
+        ranker=EdgeRanker(config.strategy),
+        tracker=tracker,
+        risk_manager=RiskManager(),
+        initial_bankroll=20.0,
+        trade_size_usd=1.0,
+        strategy_name="late_market_edge",
+        resolver=lambda ranked_market: 1.0,
+        execution_simulator=PaperExecutionSimulator(mode=PaperFillMode.FULL_FILL),
+    )
+
+    first = await engine.run_cycle(as_of=datetime(2026, 4, 6, 12, 0, tzinfo=UTC))
+    second = await engine.run_cycle(
+        as_of=datetime(2026, 4, 6, 12, 1, tzinfo=UTC),
+        blocked_market_ids={first.trade.market_id if first.trade else "paper-market"},
+    )
+
+    assert first.trade is not None
+    assert second.trade is None
+    assert tracker.trade_count(strategy_name="late_market_edge") == 1
+
+
 def test_paper_runtime_relaxes_hourly_momentum_profile() -> None:
     runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
     paper_runtime = _paper_runtime(runtime)

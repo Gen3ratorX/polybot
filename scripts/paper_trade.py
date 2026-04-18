@@ -66,6 +66,7 @@ async def main() -> None:
         )
         current = datetime.now(UTC)
         state = engine.state
+        seen_market_ids: set[str] = set()
         for _ in range(args.cycles):
             spot_snapshot = await _load_cycle_spot_snapshot(env=env, runtime=paper_runtime, tracker=tracker)
             catalyst_snapshot = await load_active_catalyst_snapshot(env=env, runtime=paper_runtime, tracker=tracker)
@@ -73,8 +74,11 @@ async def main() -> None:
                 as_of=current,
                 spot_snapshot=spot_snapshot,
                 catalyst_snapshot=catalyst_snapshot,
+                blocked_market_ids=seen_market_ids,
             )
             state = result.state
+            if result.trade is not None:
+                seen_market_ids.add(result.trade.market_id)
             if result.kill_signal is not None:
                 break
             current += timedelta(minutes=1)
