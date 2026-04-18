@@ -190,10 +190,11 @@ async def test_paper_trading_engine_skips_blocked_market_ids(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_paper_trading_engine_delays_settlement_for_momentum_profiles(tmp_path) -> None:
+async def test_paper_trading_engine_drains_delayed_settlement_for_momentum_profiles(tmp_path) -> None:
     runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
     tracker = TradeTracker(f"sqlite:///{tmp_path / 'paper-delay.db'}")
     tracker.initialize()
+    session_id = "paper-session-drain-test"
     scanner = StubScanner(
         Market(
             market_id="delay-market",
@@ -221,6 +222,7 @@ async def test_paper_trading_engine_delays_settlement_for_momentum_profiles(tmp_
         resolver=lambda ranked_market: 1.0,
         execution_simulator=PaperExecutionSimulator(mode=PaperFillMode.FULL_FILL),
         settlement_delay_minutes=1,
+        session_id=session_id,
     )
 
     first = await engine.run_cycle(
@@ -231,17 +233,18 @@ async def test_paper_trading_engine_delays_settlement_for_momentum_profiles(tmp_
     second = await engine.run_cycle(
         as_of=datetime(2026, 4, 6, 12, 1, tzinfo=UTC),
         market_universe=[second_market],
-        blocked_market_ids={scanner.market.market_id},
+        drain_only=True,
     )
 
-    latest_state = tracker.get_latest_state(strategy_name="hourly_momentum_multi_asset")
+    latest_state = tracker.get_latest_state(strategy_name="hourly_momentum_multi_asset", session_id=session_id)
 
     assert _paper_settlement_delay_minutes(runtime) == 10
     assert first.trade is None
     assert second.trade is not None
-    assert tracker.trade_count(strategy_name="hourly_momentum_multi_asset") == 1
-    assert tracker.open_position_count(strategy_name="hourly_momentum_multi_asset") == 0
-    assert tracker.open_order_count(strategy_name="hourly_momentum_multi_asset") == 0
+    assert tracker.trade_count(strategy_name="hourly_momentum_multi_asset", session_id=session_id) == 1
+    assert tracker.open_position_count(strategy_name="hourly_momentum_multi_asset", session_id=session_id) == 0
+    assert tracker.open_order_count(strategy_name="hourly_momentum_multi_asset", session_id=session_id) == 0
+    assert tracker.list_open_positions_for_strategy("hourly_momentum_multi_asset", session_id=session_id) == ()
     assert latest_state is not None
     assert latest_state.open_positions == 0
     assert latest_state.open_orders == 0

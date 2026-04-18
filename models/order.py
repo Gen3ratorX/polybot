@@ -20,6 +20,7 @@ class Order:
     order_id: str | None = None
     expires_at: datetime | None = None
     filled_size_usdc: float = 0.0
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_aware_datetime(self.created_at, "created_at")
@@ -39,6 +40,8 @@ class Order:
             _require_aware_datetime(self.expires_at, "expires_at")
             if self.expires_at <= self.created_at:
                 raise ValueError("expires_at must be after created_at")
+        if self.session_id is not None and not self.session_id.strip():
+            raise ValueError("session_id must not be empty when provided")
 
     @property
     def remaining_size_usdc(self) -> float:

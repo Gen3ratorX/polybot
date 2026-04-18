@@ -110,6 +110,7 @@ class PaperTradingEngine:
         resolver: ResolverProtocol | None = None,
         execution_simulator: PaperExecutionSimulator | None = None,
         settlement_delay_minutes: int = 0,
+        session_id: str | None = None,
     ) -> None:
         if initial_bankroll <= 0:
             raise ValueError("initial_bankroll must be positive")
@@ -125,6 +126,7 @@ class PaperTradingEngine:
         self.risk_manager = risk_manager
         self.trade_size_usd = trade_size_usd
         self.strategy_name = strategy_name
+        self.session_id = session_id
         self.resolver = resolver or default_resolver
         self.execution_simulator = execution_simulator or PaperExecutionSimulator()
         self.settlement_delay_minutes = settlement_delay_minutes
@@ -146,6 +148,7 @@ class PaperTradingEngine:
         catalyst_snapshot: CatalystSnapshot | None = None,
         blocked_market_ids: set[str] | None = None,
         market_universe: Sequence[Market] | Mapping[str, Market] | None = None,
+        drain_only: bool = False,
     ) -> PaperTradeCycleResult:
         timestamp = as_of or datetime.now(UTC)
         current_state = replace(self.state, timestamp=timestamp)
@@ -163,7 +166,7 @@ class PaperTradingEngine:
                     else timestamp + timedelta(minutes=kill_signal.pause_minutes)
                 ),
             )
-            self.tracker.record_state(paused_state)
+            self.tracker.record_state(paused_state, session_id=self.session_id)
             self.state = paused_state
             return PaperTradeCycleResult(trade=None, kill_signal=kill_signal, state=paused_state)
 
@@ -204,10 +207,23 @@ class PaperTradingEngine:
                 weekly_pnl=round(current_state.weekly_pnl + (settled_trade.pnl or 0.0), 6),
                 total_trades=current_state.total_trades + 1,
                 recent_trades=(*current_state.recent_trades, settled_trade),
-                open_positions=self.tracker.open_position_count(self.strategy_name),
+                open_positions=self.tracker.open_position_count(self.strategy_name, session_id=self.session_id),
             )
             self.tracker.record_trade(settled_trade)
-            self.tracker.record_state(current_state)
+            self.tracker.record_state(current_state, session_id=self.session_id)
+
+        if drain_only:
+            open_orders = self.tracker.open_order_count(self.strategy_name, session_id=self.session_id)
+            open_positions = self.tracker.open_position_count(self.strategy_name, session_id=self.session_id)
+            drained_state = replace(
+                current_state,
+                open_orders=open_orders,
+                open_positions=open_positions,
+                strategy_name=self.strategy_name,
+            )
+            self.tracker.record_state(drained_state, session_id=self.session_id)
+            self.state = drained_state
+            return PaperTradeCycleResult(trade=settled_trade, kill_signal=None, state=drained_state)
 
         ranked = self.ranker.rank_markets(candidates, as_of=timestamp)
         blocked_ids = set(blocked_market_ids or ())
@@ -226,6 +242,7 @@ class PaperTradingEngine:
             order_id=order_id,
             market_id=selected.market.market_id,
             strategy_name=self.strategy_name,
+            session_id=self.session_id,
             status=execution.ledger_status,
             requested_size=position_size,
             limit_price=selected.selected_price,
@@ -258,6 +275,7 @@ class PaperTradingEngine:
                 status=PositionStatus.OPEN,
                 paper_trade=True,
                 strategy_name=self.strategy_name,
+                session_id=self.session_id,
             )
             self.tracker.upsert_position(open_position)
             if self.settlement_delay_minutes <= 0:
@@ -286,8 +304,8 @@ class PaperTradingEngine:
                 )
                 bankroll_delta = round(bankroll_delta - execution.filled_size_usdc, 6)
 
-        open_orders = self.tracker.open_order_count(self.strategy_name)
-        open_positions = self.tracker.open_position_count(self.strategy_name)
+        open_orders = self.tracker.open_order_count(self.strategy_name, session_id=self.session_id)
+        open_positions = self.tracker.open_position_count(self.strategy_name, session_id=self.session_id)
         realized_pnl = settled_trade.pnl if settled_trade is not None else 0.0
         updated_state = replace(
             current_state,
@@ -304,7 +322,7 @@ class PaperTradingEngine:
             pause_until=None,
             strategy_name=self.strategy_name,
         )
-        self.tracker.record_state(updated_state)
+        self.tracker.record_state(updated_state, session_id=self.session_id)
         self.state = updated_state
         return PaperTradeCycleResult(
             trade=settled_trade,
@@ -344,11 +362,15 @@ class PaperTradingEngine:
             strategy_name=self.strategy_name,
         )
         self.tracker.upsert_position(closed_position, notes=f"paper_close_order_id={open_position.order_id}")
+        order = self.tracker.get_order_by_order_id(open_position.order_id)
+        requested_size = float(order["requested_size"]) if order is not None else open_position.position.cost_basis
+        terminal_status = "FILLED" if open_position.position.cost_basis + 1e-9 >= requested_size else "EXPIRED"
         self.tracker.close_order(
             order_id=open_position.order_id,
             strategy_name=self.strategy_name,
-            status="EXPIRED",
-            last_seen_status="EXPIRED",
+            session_id=self.session_id,
+            status=terminal_status,
+            last_seen_status=terminal_status,
             last_seen_at=timestamp,
             filled_size=open_position.position.cost_basis,
             exchange_payload={
@@ -440,6 +462,7 @@ def _paper_trade_from_position(
         paper_trade=True,
         order_id=position.order_id,
         strategy_name=strategy_name,
+        session_id=position.session_id,
         screened_price=position.fill_price,
         fill_price=position.fill_price,
         resolution_price=exit_price,

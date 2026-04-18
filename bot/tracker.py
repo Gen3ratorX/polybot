@@ -43,6 +43,7 @@ class TradeTracker:
     def record_trade(self, trade: Trade, *, notes: str | None = None) -> int:
         payload = {
             "timestamp": _serialize_datetime(trade.timestamp),
+            "session_id": trade.session_id,
             "strategy_name": trade.strategy_name,
             "market_id": trade.market_id,
             "market_question": trade.market_question,
@@ -88,6 +89,7 @@ class TradeTracker:
         last_seen_at: datetime | None = None,
         exchange_payload: object | None = None,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         existing = self.get_order_by_order_id(order_id)
         merged = _merge_order_record(
@@ -96,6 +98,7 @@ class TradeTracker:
                 "order_id": order_id,
                 "market_id": market_id,
                 "strategy_name": strategy_name or (existing["strategy_name"] if existing is not None else None),
+                "session_id": session_id or (existing["session_id"] if existing is not None else None),
                 "status": status,
                 "requested_size": requested_size,
                 "limit_price": limit_price,
@@ -112,6 +115,7 @@ class TradeTracker:
                     INSERT INTO orders (
                       timestamp,
                       order_id,
+                      session_id,
                       strategy_name,
                       market_id,
                       status,
@@ -125,6 +129,7 @@ class TradeTracker:
                     VALUES (
                       :timestamp,
                       :order_id,
+                      :session_id,
                       :strategy_name,
                       :market_id,
                       :status,
@@ -144,6 +149,7 @@ class TradeTracker:
                 UPDATE orders
                 SET timestamp = :timestamp,
                     strategy_name = :strategy_name,
+                    session_id = :session_id,
                     market_id = :market_id,
                     status = :status,
                     requested_size = :requested_size,
@@ -174,6 +180,7 @@ class TradeTracker:
         last_seen_at: datetime | None = None,
         exchange_payload: object | None = None,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         existing = self.get_order_by_order_id(order_id)
         if existing is None and market_id is None and requested_size is None:
@@ -192,6 +199,7 @@ class TradeTracker:
         else:
             base_limit_price = None
         strategy_name = strategy_name or (existing["strategy_name"] if existing is not None else None)
+        session_id = session_id or (existing["session_id"] if existing is not None else None)
         if base_market_id is None:
             raise ValueError("market_id is required to record an order fill")
         status = "FILLED" if filled_size >= base_requested_size and base_requested_size > 0 else "PARTIALLY_FILLED"
@@ -199,6 +207,7 @@ class TradeTracker:
             order_id=order_id,
             market_id=base_market_id,
             strategy_name=strategy_name,
+            session_id=session_id,
             status=status,
             requested_size=base_requested_size,
             limit_price=float(base_limit_price) if base_limit_price is not None else None,
@@ -213,11 +222,13 @@ class TradeTracker:
         limit: int = 100,
         *,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[dict[str, object], ...]:
         return self.list_orders(
             limit=limit,
             statuses=("PENDING", "OPEN", "LIVE_RESTING", "PARTIALLY_FILLED"),
             strategy_name=strategy_name,
+            session_id=session_id,
         )
 
     def list_orders(
@@ -226,6 +237,7 @@ class TradeTracker:
         limit: int = 100,
         statuses: tuple[str, ...] | list[str] | None = None,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[dict[str, object], ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -240,6 +252,9 @@ class TradeTracker:
         if strategy_name is not None:
             params["strategy_name"] = strategy_name
             where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self.connection() as conn:
             rows = conn.execute(
@@ -247,6 +262,7 @@ class TradeTracker:
                 SELECT
                   id,
                   timestamp,
+                  session_id,
                   order_id,
                   strategy_name,
                   market_id,
@@ -272,6 +288,7 @@ class TradeTracker:
         limit: int = 100,
         statuses: tuple[str, ...] | list[str] | None = None,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[dict[str, object], ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -286,6 +303,9 @@ class TradeTracker:
         if strategy_name is not None:
             params["strategy_name"] = strategy_name
             where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self.connection() as conn:
             rows = conn.execute(
@@ -293,6 +313,7 @@ class TradeTracker:
                 SELECT
                   id,
                   timestamp,
+                  session_id,
                   order_id,
                   strategy_name,
                   market_id,
@@ -400,12 +421,17 @@ class TradeTracker:
             ).fetchall()
         return tuple(_spot_snapshot_from_row(row) for row in rows)
 
-    def open_order_count(self, strategy_name: str | None = None) -> int:
-        query = "SELECT COUNT(*) AS count FROM orders WHERE status IN ('PENDING', 'OPEN', 'LIVE_RESTING', 'PARTIALLY_FILLED')"
+    def open_order_count(self, strategy_name: str | None = None, *, session_id: str | None = None) -> int:
+        query = "SELECT COUNT(*) AS count FROM orders"
         params: dict[str, object] = {}
+        where_parts = ["status IN ('PENDING', 'OPEN', 'LIVE_RESTING', 'PARTIALLY_FILLED')"]
         if strategy_name is not None:
-            query += " AND strategy_name = :strategy_name"
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query += f" WHERE {' AND '.join(where_parts)}"
         with self.connection() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["count"])
@@ -420,6 +446,7 @@ class TradeTracker:
         filled_size: float | None = None,
         exchange_payload: object | None = None,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         existing = self.get_order_by_order_id(order_id)
         if existing is None:
@@ -429,6 +456,7 @@ class TradeTracker:
             order_id=order_id,
             market_id=str(existing["market_id"]),
             strategy_name=strategy_name or existing.get("strategy_name"),
+            session_id=session_id or existing.get("session_id"),
             status=status,
             requested_size=float(existing["requested_size"]),
             limit_price=float(existing["limit_price"]) if existing.get("limit_price") is not None else None,
@@ -470,6 +498,7 @@ class TradeTracker:
         payload = {
             "id": position.position_id,
             "timestamp": _serialize_datetime(position.timestamp),
+            "session_id": position.session_id,
             "strategy_name": position.strategy_name,
             "market_id": position.market_id,
             "market_question": position.market_question,
@@ -492,6 +521,7 @@ class TradeTracker:
                     """
                     UPDATE positions
                     SET timestamp = :timestamp,
+                        session_id = :session_id,
                         strategy_name = :strategy_name,
                         market_id = :market_id,
                         market_question = :market_question,
@@ -539,14 +569,22 @@ class TradeTracker:
         strategy_name: str | None,
         *,
         limit: int = 100,
+        session_id: str | None = None,
     ) -> tuple[Position, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        query = queries.SELECT_OPEN_POSITIONS
         params: dict[str, object] = {"limit": limit}
+        where_parts = ["status = 'OPEN'"]
         if strategy_name is not None:
-            query = query.replace("WHERE status = 'OPEN'", "WHERE status = 'OPEN' AND strategy_name = :strategy_name")
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query = queries.SELECT_OPEN_POSITIONS.replace(
+            "WHERE status = 'OPEN'",
+            f"WHERE {' AND '.join(where_parts)}",
+        )
         with self.connection() as conn:
             rows = conn.execute(query, params).fetchall()
         return tuple(_position_from_row(row) for row in rows)
@@ -559,45 +597,70 @@ class TradeTracker:
         strategy_name: str | None,
         *,
         limit: int = 100,
+        session_id: str | None = None,
     ) -> tuple[Position, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        query = queries.SELECT_RECENT_POSITIONS
         params: dict[str, object] = {"limit": limit}
+        where_parts: list[str] = []
         if strategy_name is not None:
-            query = query.replace("FROM positions", "FROM positions WHERE strategy_name = :strategy_name")
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query = queries.SELECT_RECENT_POSITIONS
+        if where_parts:
+            query = query.replace("FROM positions", f"FROM positions WHERE {' AND '.join(where_parts)}")
         with self.connection() as conn:
             rows = conn.execute(query, params).fetchall()
         positions = tuple(_position_from_row(row) for row in rows)
         return tuple(reversed(positions))
 
-    def open_position_count(self, strategy_name: str | None = None) -> int:
-        query = "SELECT COUNT(*) AS count FROM positions WHERE status = 'OPEN'"
+    def open_position_count(self, strategy_name: str | None = None, *, session_id: str | None = None) -> int:
+        query = "SELECT COUNT(*) AS count FROM positions"
         params: dict[str, object] = {}
+        where_parts = ["status = 'OPEN'"]
         if strategy_name is not None:
-            query += " AND strategy_name = :strategy_name"
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query += f" WHERE {' AND '.join(where_parts)}"
         with self.connection() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["count"])
 
-    def list_recent_trades(self, limit: int = 100, *, strategy_name: str | None = None) -> tuple[Trade, ...]:
+    def list_recent_trades(
+        self,
+        limit: int = 100,
+        *,
+        strategy_name: str | None = None,
+        session_id: str | None = None,
+    ) -> tuple[Trade, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        query = queries.SELECT_RECENT_TRADES
         params: dict[str, object] = {"limit": limit}
+        where_parts: list[str] = []
         if strategy_name is not None:
-            query = query.replace("FROM trades", "FROM trades WHERE strategy_name = :strategy_name")
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query = queries.SELECT_RECENT_TRADES
+        if where_parts:
+            query = query.replace("FROM trades", f"FROM trades WHERE {' AND '.join(where_parts)}")
         with self.connection() as conn:
             rows = conn.execute(query, params).fetchall()
         trades = tuple(_trade_from_row(row) for row in rows)
         return tuple(reversed(trades))
 
-    def record_state(self, state: BotState) -> int:
+    def record_state(self, state: BotState, *, session_id: str | None = None) -> int:
         payload = {
             "timestamp": _serialize_datetime(state.timestamp),
+            "session_id": session_id,
             "strategy_name": state.strategy_name,
             "bankroll": state.bankroll,
             "phase": state.phase,
@@ -821,18 +884,29 @@ class TradeTracker:
         *,
         recent_trade_limit: int = 100,
         strategy_name: str | None = None,
+        session_id: str | None = None,
     ) -> BotState | None:
-        query = queries.SELECT_LATEST_STATE
         params: dict[str, object] = {}
+        where_parts: list[str] = []
         if strategy_name is not None:
-            query = query.replace("FROM state", "FROM state WHERE strategy_name = :strategy_name")
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        query = queries.SELECT_LATEST_STATE
+        if where_parts:
+            query = query.replace("FROM state", f"FROM state WHERE {' AND '.join(where_parts)}")
         with self.connection() as conn:
             row = conn.execute(query, params).fetchone()
         if row is None:
             return None
 
-        recent_trades = self.list_recent_trades(limit=recent_trade_limit, strategy_name=strategy_name)
+        recent_trades = self.list_recent_trades(
+            limit=recent_trade_limit,
+            strategy_name=strategy_name,
+            session_id=session_id,
+        )
         return BotState(
             timestamp=_parse_datetime(row["timestamp"]),
             strategy_name=row["strategy_name"],
@@ -855,12 +929,18 @@ class TradeTracker:
             recent_trades=recent_trades,
         )
 
-    def trade_count(self, strategy_name: str | None = None) -> int:
+    def trade_count(self, strategy_name: str | None = None, *, session_id: str | None = None) -> int:
         query = "SELECT COUNT(*) AS count FROM trades"
         params: dict[str, object] = {}
+        where_parts: list[str] = []
         if strategy_name is not None:
-            query += " WHERE strategy_name = :strategy_name"
             params["strategy_name"] = strategy_name
+            where_parts.append("strategy_name = :strategy_name")
+        if session_id is not None:
+            params["session_id"] = session_id
+            where_parts.append("session_id = :session_id")
+        if where_parts:
+            query += f" WHERE {' AND '.join(where_parts)}"
         with self.connection() as conn:
             row = conn.execute(query, params).fetchone()
         return int(row["count"])
@@ -872,6 +952,7 @@ class TradeTracker:
                 SELECT
                   id,
                   timestamp,
+                  session_id,
                   order_id,
                   strategy_name,
                   market_id,
@@ -907,6 +988,7 @@ class TradeTracker:
             cost_basis=trade.position_size,
             order_id=trade.order_id,
             strategy_name=trade.strategy_name,
+            session_id=trade.session_id,
             paper_trade=trade.paper_trade,
         )
         return self.upsert_position(position)
@@ -1187,6 +1269,7 @@ def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
         conn,
         "trades",
         (
+            ("session_id", "TEXT"),
             ("strategy_name", "TEXT"),
             ("screened_price", "REAL"),
             ("fill_slippage", "REAL"),
@@ -1197,6 +1280,7 @@ def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
         conn,
         "orders",
         (
+            ("session_id", "TEXT"),
             ("strategy_name", "TEXT"),
             ("limit_price", "REAL"),
         ),
@@ -1205,6 +1289,7 @@ def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
         conn,
         "state",
         (
+            ("session_id", "TEXT"),
             ("strategy_name", "TEXT"),
         ),
     )
@@ -1212,6 +1297,7 @@ def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
         conn,
         "positions",
         (
+            ("session_id", "TEXT"),
             ("strategy_name", "TEXT"),
         ),
     )
@@ -1269,6 +1355,7 @@ def _parse_datetime(value: object) -> datetime | None:
 def _trade_from_row(row: sqlite3.Row) -> Trade:
     return Trade(
         timestamp=_parse_datetime(row["timestamp"]) or datetime.now(UTC),
+        session_id=row["session_id"],
         strategy_name=row["strategy_name"],
         market_id=row["market_id"],
         market_question=row["market_question"],
@@ -1296,6 +1383,7 @@ def _position_from_row(row: sqlite3.Row) -> Position:
     return Position(
         position_id=int(row["id"]) if row["id"] is not None else None,
         timestamp=_parse_datetime(row["timestamp"]) or datetime.now(UTC),
+        session_id=row["session_id"],
         strategy_name=row["strategy_name"],
         market_id=row["market_id"],
         market_question=row["market_question"],
@@ -1328,6 +1416,7 @@ def _order_from_row(row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": int(row["id"]) if row["id"] is not None else None,
         "timestamp": _parse_datetime(row["timestamp"]),
+        "session_id": row["session_id"],
         "order_id": row["order_id"],
         "strategy_name": row["strategy_name"],
         "market_id": row["market_id"],
@@ -1467,10 +1556,14 @@ def _merge_order_record(
     strategy_name = incoming.get("strategy_name")
     if strategy_name is None and existing is not None:
         strategy_name = existing.get("strategy_name")
+    session_id = incoming.get("session_id")
+    if session_id is None and existing is not None:
+        session_id = existing.get("session_id")
 
     return {
         "timestamp": _serialize_datetime(timestamp),
         "order_id": incoming["order_id"],
+        "session_id": session_id,
         "strategy_name": strategy_name,
         "market_id": incoming["market_id"],
         "status": merged_status,

@@ -6,6 +6,7 @@ from dataclasses import replace
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -41,6 +42,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override the paper trade size. Defaults to the smaller of the profile cap and the global min position.",
     )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help="Optional session identifier. Defaults to a generated UUID4 hex string.",
+    )
+    parser.add_argument(
+        "--drain-sleep-seconds",
+        type=float,
+        default=0.25,
+        help="Sleep interval while draining delayed paper positions.",
+    )
     return parser.parse_args()
 
 
@@ -51,6 +63,7 @@ async def main() -> None:
     env = load_environment()
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
+    session_id = args.session_id or uuid4().hex
 
     async with GammaClient() as gamma_client:
         scanner = MarketScanner(gamma_client, paper_runtime.strategy)
@@ -64,6 +77,7 @@ async def main() -> None:
             trade_size_usd=_paper_trade_size(paper_runtime, args.trade_size_usd),
             strategy_name=paper_runtime.strategy.name,
             settlement_delay_minutes=_paper_settlement_delay_minutes(paper_runtime),
+            session_id=session_id,
         )
         current = datetime.now(UTC)
         state = engine.state
@@ -86,6 +100,17 @@ async def main() -> None:
                 break
             current += timedelta(minutes=1)
 
+        state = await _drain_paper_session(
+            engine=engine,
+            scanner=scanner,
+            env=env,
+            runtime=paper_runtime,
+            tracker=tracker,
+            current=current,
+            sleep_seconds=args.drain_sleep_seconds,
+        )
+
+    print(f"session_id={session_id}")
     print(f"paper trades={state.total_trades}")
     print(f"bankroll={state.bankroll:.4f}")
 
@@ -139,6 +164,40 @@ async def _load_cycle_spot_snapshot(*, env, runtime, tracker):
         snapshots = await load_active_spot_snapshots(env=env, runtime=runtime, tracker=tracker)
         return snapshots if snapshots else None
     return await load_active_spot_snapshot(env=env, runtime=runtime, tracker=tracker)
+
+
+async def _drain_paper_session(
+    *,
+    engine: PaperTradingEngine,
+    scanner: MarketScanner,
+    env,
+    runtime,
+    tracker: TradeTracker,
+    current: datetime,
+    sleep_seconds: float,
+) -> object:
+    if sleep_seconds < 0:
+        raise ValueError("sleep_seconds must be non-negative")
+    drain_cycles = 0
+    max_drain_cycles = max(1, _paper_settlement_delay_minutes(runtime) + 5)
+    while engine.state.open_positions > 0 and drain_cycles < max_drain_cycles:
+        market_universe = await scanner.load_markets()
+        spot_snapshot = await _load_cycle_spot_snapshot(env=env, runtime=runtime, tracker=tracker)
+        catalyst_snapshot = await load_active_catalyst_snapshot(env=env, runtime=runtime, tracker=tracker)
+        result = await engine.run_cycle(
+            as_of=current,
+            spot_snapshot=spot_snapshot,
+            catalyst_snapshot=catalyst_snapshot,
+            market_universe=market_universe,
+            drain_only=True,
+        )
+        if result.kill_signal is not None:
+            break
+        current += timedelta(minutes=1)
+        drain_cycles += 1
+        if sleep_seconds > 0:
+            await asyncio.sleep(sleep_seconds)
+    return engine.state
 
 
 if __name__ == "__main__":

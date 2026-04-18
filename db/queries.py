@@ -109,6 +109,7 @@ ON CONFLICT(provider, calendar_id) DO UPDATE SET
 INSERT_TRADE = """
 INSERT INTO trades (
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,
@@ -133,6 +134,7 @@ INSERT INTO trades (
 )
 VALUES (
   :timestamp,
+  :session_id,
   :strategy_name,
   :market_id,
   :market_question,
@@ -160,6 +162,7 @@ VALUES (
 INSERT_STATE = """
 INSERT INTO state (
   timestamp,
+  session_id,
   strategy_name,
   bankroll,
   phase,
@@ -183,6 +186,7 @@ INSERT INTO state (
 )
 VALUES (
   :timestamp,
+  :session_id,
   :strategy_name,
   :bankroll,
   :phase,
@@ -315,6 +319,7 @@ UPSERT_POSITION = """
 INSERT INTO positions (
   id,
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,
@@ -334,6 +339,7 @@ INSERT INTO positions (
 VALUES (
   :id,
   :timestamp,
+  :session_id,
   :strategy_name,
   :market_id,
   :market_question,
@@ -352,6 +358,7 @@ VALUES (
 )
 ON CONFLICT(order_id) DO UPDATE SET
   timestamp=excluded.timestamp,
+  session_id=excluded.session_id,
   strategy_name=excluded.strategy_name,
   market_id=excluded.market_id,
   market_question=excluded.market_question,
@@ -412,6 +419,7 @@ VALUES (
 SELECT_RECENT_TRADES = """
 SELECT
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,
@@ -471,6 +479,7 @@ LIMIT :limit
 SELECT_LATEST_STATE = """
 SELECT
   timestamp,
+  session_id,
   strategy_name,
   bankroll,
   phase,
@@ -543,6 +552,7 @@ SELECT_OPEN_POSITIONS = """
 SELECT
   id,
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,
@@ -568,6 +578,7 @@ SELECT_RECENT_POSITIONS = """
 SELECT
   id,
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,
@@ -592,6 +603,7 @@ SELECT_POSITION_BY_ORDER_ID = """
 SELECT
   id,
   timestamp,
+  session_id,
   strategy_name,
   market_id,
   market_question,

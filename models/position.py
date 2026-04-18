@@ -24,6 +24,7 @@ class Position:
     pnl: float | None = None
     paper_trade: bool = False
     strategy_name: str | None = None
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_aware_datetime(self.timestamp, "timestamp")
@@ -43,6 +44,8 @@ class Position:
             raise ValueError("resolution_price must be between 0 and 1 when provided")
         if self.strategy_name is not None and not self.strategy_name.strip():
             raise ValueError("strategy_name must not be empty when provided")
+        if self.session_id is not None and not self.session_id.strip():
+            raise ValueError("session_id must not be empty when provided")
         if self.status is PositionStatus.OPEN and self.pnl is not None:
             raise ValueError("Open positions cannot have realized pnl")
 

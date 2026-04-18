@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS trades (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id        TEXT,
   strategy_name     TEXT,
   market_id         TEXT NOT NULL,
   market_question   TEXT NOT NULL,
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE TABLE IF NOT EXISTS state (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id              TEXT,
   strategy_name           TEXT,
   bankroll                REAL NOT NULL,
   phase                   INTEGER NOT NULL,
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS corrections (
 CREATE TABLE IF NOT EXISTS orders (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id          TEXT,
   order_id            TEXT NOT NULL UNIQUE,
   strategy_name       TEXT,
   market_id           TEXT NOT NULL,
@@ -124,6 +127,7 @@ CREATE TABLE IF NOT EXISTS spot_ticks (
 CREATE TABLE IF NOT EXISTS positions (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id        TEXT,
   strategy_name     TEXT,
   market_id         TEXT NOT NULL,
   market_question   TEXT NOT NULL,
@@ -184,12 +188,15 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
+CREATE INDEX IF NOT EXISTS idx_trades_session_id ON trades(session_id);
 CREATE INDEX IF NOT EXISTS idx_trades_strategy_name ON trades(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_trades_category ON trades(category);
 CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome);
 CREATE INDEX IF NOT EXISTS idx_state_timestamp ON state(timestamp);
+CREATE INDEX IF NOT EXISTS idx_state_session_id ON state(session_id);
 CREATE INDEX IF NOT EXISTS idx_state_strategy_name ON state(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_session_id ON orders(session_id);
 CREATE INDEX IF NOT EXISTS idx_orders_strategy_name ON orders(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_id);
 CREATE INDEX IF NOT EXISTS idx_catalyst_events_provider ON catalyst_events(provider);
@@ -199,6 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_catalyst_events_event ON catalyst_events(event);
 CREATE INDEX IF NOT EXISTS idx_spot_ticks_symbol ON spot_ticks(symbol);
 CREATE INDEX IF NOT EXISTS idx_spot_ticks_observed_at ON spot_ticks(observed_at);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
+CREATE INDEX IF NOT EXISTS idx_positions_session_id ON positions(session_id);
 CREATE INDEX IF NOT EXISTS idx_positions_strategy_name ON positions(strategy_name);
 CREATE INDEX IF NOT EXISTS idx_positions_market ON positions(market_id);
 CREATE INDEX IF NOT EXISTS idx_profile_controls_scope ON profile_controls(scope);

@@ -29,6 +29,7 @@ class Trade:
     execution_fee: float = 0.0
     paper_trade: bool = True
     strategy_name: str | None = None
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_aware_datetime(self.timestamp, "timestamp")
@@ -59,6 +60,8 @@ class Trade:
             raise ValueError("execution_fee must be non-negative")
         if self.strategy_name is not None and not self.strategy_name.strip():
             raise ValueError("strategy_name must not be empty when provided")
+        if self.session_id is not None and not self.session_id.strip():
+            raise ValueError("session_id must not be empty when provided")
         if self.outcome is TradeOutcome.PENDING and self.pnl is not None:
             raise ValueError("Pending trades cannot have pnl assigned")
         if self.outcome in {TradeOutcome.WIN, TradeOutcome.LOSS} and self.resolution_price is None:
