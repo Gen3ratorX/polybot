@@ -62,6 +62,7 @@ async def main() -> None:
             risk_manager=RiskManager(),
             initial_bankroll=20.0,
             trade_size_usd=_paper_trade_size(paper_runtime, args.trade_size_usd),
+            strategy_name=paper_runtime.strategy.name,
         )
         current = datetime.now(UTC)
         state = engine.state
@@ -91,6 +92,10 @@ def _paper_trade_size(runtime, override: float | None) -> float:
     if profile_cap is not None:
         return min(profile_cap, runtime.execution.min_position_usd)
     return runtime.execution.min_position_usd
+
+
+def _paper_strategy_name(runtime) -> str:
+    return runtime.strategy.name
 
 
 def _paper_runtime(runtime):

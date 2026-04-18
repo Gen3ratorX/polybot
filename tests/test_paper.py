@@ -10,7 +10,7 @@ from bot.ranker import EdgeRanker
 from bot.risk import RiskManager
 from bot.tracker import TradeTracker
 from models import Market
-from scripts.paper_trade import _paper_runtime
+from scripts.paper_trade import _paper_runtime, _paper_strategy_name
 
 
 class StubScanner:
@@ -180,6 +180,11 @@ def test_paper_runtime_relaxes_hourly_momentum_profile() -> None:
     assert paper_runtime.strategy.momentum_min_abs_volume_change_1h_pct is None
     assert paper_runtime.strategy.momentum_min_abs_one_hour_price_change is None
     assert paper_runtime.strategy.min_score == 3.5
+
+
+def test_paper_strategy_name_tracks_runtime_profile() -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    assert _paper_strategy_name(runtime) == "hourly_momentum_multi_asset"
 
 
 def _market() -> Market:
