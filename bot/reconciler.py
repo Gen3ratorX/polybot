@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -82,6 +82,8 @@ async def reconcile_open_orders(
             existing_status in {"CANCELLED", "REJECTED", "EXPIRED"} and resolved_fill > 0
         )
         created_position = False
+        existing_position = tracker.get_position_by_order_id(order_id)
+        resolved_entry_price = limit_price or resolved_price or exchange_status.price or 0.0
 
         if resolved_fill > 0:
             tracker.update_order_fill(
@@ -129,6 +131,29 @@ async def reconcile_open_orders(
                 )
                 tracker.register_open_position_from_trade(trade)
                 created_position = True
+            elif exchange_status.side == "BUY" and existing_position is not None:
+                total_position_size = round(resolved_fill * resolved_entry_price, 6)
+                tracker.upsert_position(
+                    replace(
+                        existing_position,
+                        timestamp=resolved_time,
+                        fill_price=resolved_entry_price,
+                        shares=resolved_fill,
+                        cost_basis=total_position_size,
+                        paper_trade=False,
+                    ),
+                    notes=json.dumps(
+                        {
+                            "reconciled_from_order": {
+                                "order_id": order_id,
+                                "exchange_status": exchange_status.status,
+                                "matched_size": resolved_fill,
+                                "price": resolved_price,
+                                "position_updated": True,
+                            }
+                        }
+                    ),
+                )
         elif resolved_status in {"CANCELLED", "REJECTED", "EXPIRED"}:
             tracker.close_order(
                 order_id=order_id,

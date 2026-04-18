@@ -219,6 +219,80 @@ async def test_reconcile_open_orders_updates_live_resting_complete_fill(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_reconcile_open_orders_grows_existing_position_on_later_partial_fill(tmp_path) -> None:
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'orders-growing.db'}")
+    tracker.initialize()
+
+    order_id = "oid-growing"
+    submitted_at = datetime(2026, 4, 7, 16, 0, tzinfo=UTC)
+    tracker.record_order(
+        order_id=order_id,
+        market_id="m1",
+        status="PARTIALLY_FILLED",
+        requested_size=5.0,
+        limit_price=0.95,
+        filled_size=2.5,
+        last_seen_status="PARTIALLY_FILLED",
+        last_seen_at=submitted_at,
+    )
+    initial_trade = Trade(
+        timestamp=submitted_at,
+        market_id="m1",
+        market_question="Question",
+        category="sports",
+        side=OutcomeSide.YES,
+        entry_price=0.95,
+        position_size=2.375,
+        order_id=order_id,
+        fill_price=0.95,
+        fill_time=submitted_at,
+        outcome=TradeOutcome.PENDING,
+        paper_trade=False,
+    )
+    tracker.record_trade(initial_trade)
+    tracker.register_open_position_from_trade(initial_trade)
+
+    client = FakeClobClient(
+        order_payloads={
+            order_id: _order_payload(
+                order_id=order_id,
+                status="LIVE",
+                side="BUY",
+                size_matched=0.0,
+                created_at=submitted_at,
+            )
+        },
+        trades_by_token={
+            "yes-token": [
+                _maker_trade_payload(
+                    token_id="yes-token",
+                    side="BUY",
+                    matched_amount=5.0,
+                    price=0.95,
+                    match_time=submitted_at + timedelta(seconds=30),
+                )
+            ]
+        },
+    )
+
+    results = await reconcile_open_orders(tracker, FakeGammaClient(), client)
+
+    assert len(results) == 1
+    assert results[0].previous_status == "PARTIALLY_FILLED"
+    assert results[0].current_status == "FILLED"
+
+    stored = tracker.get_order_by_order_id(order_id)
+    assert stored is not None
+    assert stored["filled_size"] == 5.0
+
+    position = tracker.get_position_by_order_id(order_id)
+    assert position is not None
+    assert position.shares == 5.0
+    assert position.cost_basis == pytest.approx(4.75, rel=1e-6)
+    assert tracker.open_position_count() == 1
+
+
+@pytest.mark.asyncio
 async def test_reconcile_open_orders_corrects_provisional_cancel_to_partial_fill(tmp_path) -> None:
     tracker = TradeTracker(f"sqlite:///{tmp_path / 'orders-cancel.db'}")
     tracker.initialize()

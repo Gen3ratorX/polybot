@@ -602,3 +602,101 @@ def test_find_exit_candidate_exits_when_btc_catalyst_is_inactive(tmp_path) -> No
 
     assert candidate is not None
     assert candidate[0].market_id == "btc3"
+
+
+def test_find_exit_candidate_routes_correct_spot_snapshot_for_hourly_multi_asset_profile(tmp_path) -> None:
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'exit-hourly-multi.db'}")
+    tracker.initialize()
+    trade = Trade(
+        timestamp=datetime.now(UTC) - timedelta(minutes=10),
+        market_id="eth1",
+        market_question="Will Ethereum be above 3500?",
+        category="crypto",
+        side=OutcomeSide.YES,
+        entry_price=0.52,
+        position_size=2.6,
+        order_id="eth-entry-oid",
+        fill_price=0.52,
+        fill_time=datetime.now(UTC) - timedelta(minutes=10, seconds=5),
+        outcome=TradeOutcome.PENDING,
+        paper_trade=False,
+    )
+    tracker.record_trade(trade)
+    tracker.register_open_position_from_trade(trade)
+
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    market = SimpleNamespace(
+        market_id="eth1",
+        condition_id="cond-eth1",
+        question="Will Ethereum be above 3500?",
+        yes_price=0.41,
+        no_price=0.59,
+        yes_token_id="eth-yes",
+        no_token_id="eth-no",
+        strategy_text_corpus=lambda: "Will Ethereum be above 3500? ethereum eth",
+        token_id_for=lambda side: "eth-yes" if side is OutcomeSide.YES else "eth-no",
+    )
+    spot_snapshots = {
+        "xbtusd": SpotSnapshot(
+            symbol="XBTUSD",
+            pair="XBTUSD",
+            spot_price=70500.0,
+            return_15m_pct=0.0001,
+            return_1h_pct=0.001,
+            fetch_latency_seconds=0.1,
+            observed_at=datetime.now(UTC),
+            age_seconds=5.0,
+            source="kraken",
+            payload=None,
+        ),
+        "ethusd": SpotSnapshot(
+            symbol="ETHUSD",
+            pair="ETHUSD",
+            spot_price=3600.0,
+            return_15m_pct=-0.006,
+            return_1h_pct=-0.012,
+            fetch_latency_seconds=0.1,
+            observed_at=datetime.now(UTC),
+            age_seconds=5.0,
+            source="kraken",
+            payload=None,
+        ),
+        "solusd": SpotSnapshot(
+            symbol="SOLUSD",
+            pair="SOLUSD",
+            spot_price=150.0,
+            return_15m_pct=0.0002,
+            return_1h_pct=0.001,
+            fetch_latency_seconds=0.1,
+            observed_at=datetime.now(UTC),
+            age_seconds=5.0,
+            source="kraken",
+            payload=None,
+        ),
+    }
+
+    class FakeGammaClient:
+        async def fetch_market(self, market_id: str):
+            return market
+
+    async def run_check():
+        return await find_exit_candidate(tracker, runtime, spot_snapshot=spot_snapshots)
+
+    from bot import exit_manager as exit_manager_module
+
+    class FakeGammaContext:
+        async def __aenter__(self):
+            return FakeGammaClient()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    original_gamma = exit_manager_module.GammaClient
+    exit_manager_module.GammaClient = lambda: FakeGammaContext()
+    try:
+        candidate = asyncio.run(run_check())
+    finally:
+        exit_manager_module.GammaClient = original_gamma
+
+    assert candidate is not None
+    assert candidate[0].market_id == "eth1"
