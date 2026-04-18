@@ -728,6 +728,50 @@ class TradeTracker:
         with self.connection() as conn:
             conn.execute(queries.UPSERT_TELEGRAM_ROUTER_STATE, payload)
 
+    def get_runtime_setting(self, setting_key: str) -> dict[str, object] | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                queries.SELECT_RUNTIME_SETTING,
+                {"setting_key": setting_key},
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "setting_key": row["setting_key"],
+            "setting_value": row["setting_value"],
+            "updated_at": _parse_datetime(row["updated_at"]),
+            "updated_by": row["updated_by"],
+            "source_chat_id": row["source_chat_id"],
+            "source_message_id": row["source_message_id"],
+            "last_command": row["last_command"],
+            "notes": row["notes"],
+        }
+
+    def upsert_runtime_setting(
+        self,
+        setting_key: str,
+        setting_value: str,
+        *,
+        updated_by: str | None = None,
+        source_chat_id: str | None = None,
+        source_message_id: int | None = None,
+        last_command: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, object]:
+        payload = {
+            "setting_key": setting_key,
+            "setting_value": setting_value,
+            "updated_at": _serialize_datetime(datetime.now(UTC)),
+            "updated_by": updated_by,
+            "source_chat_id": source_chat_id,
+            "source_message_id": source_message_id,
+            "last_command": last_command,
+            "notes": notes,
+        }
+        with self.connection() as conn:
+            conn.execute(queries.UPSERT_RUNTIME_SETTING, payload)
+        return self.get_runtime_setting(setting_key) or payload
+
     def upsert_control_state(
         self,
         *,

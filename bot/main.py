@@ -37,6 +37,8 @@ def main() -> None:
     profile_performance = tracker.profile_performance_report()
     autoscale = AutoScaleEngine()
     bankroll = latest_state.bankroll if latest_state is not None else 0.0
+    submit_enabled_setting = tracker.get_runtime_setting("submit_enabled")
+    submit_enabled = _parse_submit_enabled(submit_enabled_setting, default=env.paper_trade)
     active_profile = runtime.strategy.name
     active_trade_count = tracker.trade_count(strategy_name=active_profile)
     active_open_position_count = tracker.open_position_count(strategy_name=active_profile)
@@ -44,6 +46,7 @@ def main() -> None:
     phase = autoscale.get_phase_info(bankroll)
     payload = {
         "paper_trade": env.paper_trade,
+        "submit_enabled": submit_enabled,
         "database_url": env.database_url,
         "state_strategy_name": latest_state.strategy_name if latest_state is not None else None,
         "trade_count": active_trade_count,
@@ -82,6 +85,7 @@ def main() -> None:
 
     print("Polymarket Edge Bot")
     print(f"paper_trade={payload['paper_trade']}")
+    print(f"submit_enabled={payload['submit_enabled']}")
     print(f"database_url={payload['database_url']}")
     print(f"state_strategy_name={payload['state_strategy_name']}")
     print(f"trade_count={payload['trade_count']}")
@@ -199,6 +203,17 @@ def _format_profile_win_rate(value) -> str:
     if value is None:
         return "n/a"
     return f"{value:.1%}"
+
+
+def _parse_submit_enabled(setting, *, default: bool) -> bool:
+    if setting is None:
+        return default
+    value = str(setting["setting_value"]).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 if __name__ == "__main__":

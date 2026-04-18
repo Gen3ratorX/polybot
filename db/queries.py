@@ -315,6 +315,52 @@ WHERE id = 1
 LIMIT 1
 """
 
+UPSERT_RUNTIME_SETTING = """
+INSERT INTO runtime_settings (
+  setting_key,
+  setting_value,
+  updated_at,
+  updated_by,
+  source_chat_id,
+  source_message_id,
+  last_command,
+  notes
+)
+VALUES (
+  :setting_key,
+  :setting_value,
+  :updated_at,
+  :updated_by,
+  :source_chat_id,
+  :source_message_id,
+  :last_command,
+  :notes
+)
+ON CONFLICT(setting_key) DO UPDATE SET
+  setting_value=excluded.setting_value,
+  updated_at=excluded.updated_at,
+  updated_by=excluded.updated_by,
+  source_chat_id=excluded.source_chat_id,
+  source_message_id=excluded.source_message_id,
+  last_command=excluded.last_command,
+  notes=excluded.notes
+"""
+
+SELECT_RUNTIME_SETTING = """
+SELECT
+  setting_key,
+  setting_value,
+  updated_at,
+  updated_by,
+  source_chat_id,
+  source_message_id,
+  last_command,
+  notes
+FROM runtime_settings
+WHERE setting_key = :setting_key
+LIMIT 1
+"""
+
 UPSERT_POSITION = """
 INSERT INTO positions (
   id,

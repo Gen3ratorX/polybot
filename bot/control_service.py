@@ -8,6 +8,7 @@ from bot.tracker import TradeTracker
 
 
 KNOWN_PROFILES = ("late_market_edge", "btc_up_down")
+SUBMIT_ENABLED_KEY = "submit_enabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,14 +44,17 @@ class ControlService:
 
     def get_global_status(self) -> dict[str, object]:
         control = self.tracker.get_control_state(None)
+        submit_enabled_setting = self.tracker.get_runtime_setting(SUBMIT_ENABLED_KEY)
         if control is None:
             return {
                 "desired_state": "RUNNING",
                 "run_once_pending": 0,
+                "submit_enabled": _parse_runtime_bool(submit_enabled_setting),
             }
         return {
             "desired_state": control.desired_state,
             "run_once_pending": control.run_once_pending,
+            "submit_enabled": _parse_runtime_bool(submit_enabled_setting),
         }
 
     def get_profile_status(self, profile_name: str) -> dict[str, object]:
@@ -90,6 +94,8 @@ class ControlService:
         lines.append(
             f"global={global_status['desired_state']} run_once={global_status['run_once_pending']}"
         )
+        submit_enabled = global_status.get("submit_enabled")
+        lines.append(f"submit_enabled={_format_runtime_bool(submit_enabled)}")
         for profile in self.list_profiles():
             profile_status = self.get_profile_status(profile)
             lines.append(
@@ -131,6 +137,30 @@ class ControlService:
     ) -> ControlMutationResult:
         normalized = command.strip().lower()
         if normalized == "status":
+            return ControlMutationResult(True, normalized, "GLOBAL", None, self.render_global_status())
+        if normalized in {"go_live", "go_paper", "dry_run"}:
+            submit_enabled = normalized == "go_live"
+            with acquire_database_lock(self.database_url):
+                self.tracker.upsert_runtime_setting(
+                    SUBMIT_ENABLED_KEY,
+                    "true" if submit_enabled else "false",
+                    updated_by=actor,
+                    source_chat_id=source_chat_id,
+                    source_message_id=source_message_id,
+                    last_command=f"/{normalized}",
+                    notes=notes or ("Live submit enabled" if submit_enabled else "Live submit disabled"),
+                )
+                if submit_enabled:
+                    self.tracker.upsert_control_state(
+                        profile_name=None,
+                        desired_state="RUNNING",
+                        run_once_pending=0,
+                        updated_by=actor,
+                        source_chat_id=source_chat_id,
+                        source_message_id=source_message_id,
+                        last_command=f"/{normalized}",
+                        notes=notes or "Global go_live",
+                    )
             return ControlMutationResult(True, normalized, "GLOBAL", None, self.render_global_status())
         if normalized == "stop_all":
             with acquire_database_lock(self.database_url):
@@ -216,3 +246,20 @@ class ControlService:
             else:
                 raise ValueError(f"Unsupported profile command: {command}")
         return ControlMutationResult(True, normalized, "PROFILE", profile_name, self.render_profile_status(profile_name))
+
+
+def _parse_runtime_bool(setting: dict[str, object] | None) -> bool | None:
+    if setting is None:
+        return None
+    value = str(setting["setting_value"]).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _format_runtime_bool(value: bool | None) -> str:
+    if value is None:
+        return "unknown"
+    return "true" if value else "false"

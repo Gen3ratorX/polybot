@@ -10,6 +10,28 @@ from bot.runtime_state import send_optional_alert
 from bot.tracker import TradeTracker
 
 
+GLOBAL_COMMANDS = {
+    "status",
+    "pause",
+    "resume",
+    "stop_all",
+    "help",
+    "commands",
+    "go_live",
+    "go_paper",
+    "dry_run",
+}
+GLOBAL_ONLY_COMMANDS = {
+    "status",
+    "stop_all",
+    "help",
+    "commands",
+    "go_live",
+    "go_paper",
+    "dry_run",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramCommandResult:
     handled: bool
@@ -103,7 +125,7 @@ class TelegramCommandRouter:
             await client.send_message(message.chat_id, response)
             return TelegramCommandResult(True, command, "GLOBAL", None, response)
 
-        if command in {"pause", "resume"} and profile_name is None:
+        if command in {"pause", "resume", "go_live", "go_paper", "dry_run"} and profile_name is None:
             result = self.service.apply_global_command(
                 command,
                 actor=_message_author(message),
@@ -168,7 +190,7 @@ class TelegramCommandRouter:
         if command in GLOBAL_COMMANDS:
             return (
                 "Unknown or incomplete global command.\n"
-                "Use: /status | /pause | /resume | /stop_all | /help"
+                "Use: /status | /pause | /resume | /stop_all | /go_live | /go_paper | /dry_run | /help"
             )
         return (
             "Unknown or incomplete profile command.\n"
@@ -186,6 +208,9 @@ class TelegramCommandRouter:
             "/pause - pause all profiles",
             "/resume - resume all profiles",
             "/stop_all - stop everything cleanly",
+            "/go_live - enable live submit mode",
+            "/go_paper - disable live submit mode",
+            "/dry_run - alias for /go_paper",
             "",
             "Per-profile:",
         ]
@@ -211,7 +236,7 @@ def parse_command(message: TelegramMessage) -> tuple[str | None, str | None]:
         return None, None
     parts = text.strip().split()
     command = parts[0].lstrip("/").split("@", 1)[0].lower()
-    if command in {"stop_all", "help", "commands"}:
+    if command in GLOBAL_ONLY_COMMANDS:
         return command, None
     if len(parts) >= 2:
         return command, parts[1].strip()

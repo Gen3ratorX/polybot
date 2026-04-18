@@ -269,6 +269,26 @@ def test_tracker_persists_trade_fill_quality_fields(tmp_path) -> None:
     assert stored.fill_slippage_pct == pytest.approx(0.021053, rel=1e-6)
 
 
+def test_tracker_persists_runtime_settings(tmp_path) -> None:
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'runtime.db'}")
+    tracker.initialize()
+
+    tracker.upsert_runtime_setting(
+        "submit_enabled",
+        "false",
+        updated_by="tester",
+        last_command="/go_paper",
+        notes="disabled from test",
+    )
+    stored = tracker.get_runtime_setting("submit_enabled")
+
+    assert stored is not None
+    assert stored["setting_key"] == "submit_enabled"
+    assert stored["setting_value"] == "false"
+    assert stored["updated_by"] == "tester"
+    assert stored["last_command"] == "/go_paper"
+
+
 def _resolved_trade(market_id: str, pnl: float, *, strategy_name: str | None = None) -> Trade:
     outcome = TradeOutcome.WIN if pnl > 0 else TradeOutcome.LOSS
     resolution_price = 1.0 if pnl > 0 else 0.0

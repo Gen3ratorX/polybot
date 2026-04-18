@@ -11,6 +11,9 @@ from bot.supervisor import ExecutedCycle, run_supervised_cycle
 from bot.tracker import TradeTracker
 
 
+SUBMIT_ENABLED_SETTING_KEY = "submit_enabled"
+
+
 @dataclass(frozen=True, slots=True)
 class DaemonCycle:
     cycle_index: int
@@ -59,6 +62,14 @@ def run_daemon(
 
     tracker = TradeTracker(env.database_url)
     tracker.initialize()
+    if tracker.get_runtime_setting(SUBMIT_ENABLED_SETTING_KEY) is None:
+        tracker.upsert_runtime_setting(
+            SUBMIT_ENABLED_SETTING_KEY,
+            "true" if submit else "false",
+            updated_by="daemon",
+            last_command="/daemon_start",
+            notes="Daemon startup submit default",
+        )
     results: list[DaemonCycle] = []
     send_optional_alert(
         env,
@@ -72,6 +83,7 @@ def run_daemon(
     completed = 0
     try:
         while cycles is None or completed < cycles:
+            effective_submit = _resolve_submit_enabled(tracker, default_submit=submit)
             executed = cycle_runner(
                 env=env,
                 runtime=runtime,
@@ -80,7 +92,7 @@ def run_daemon(
                 limit_price=limit_price,
                 top=top,
                 near_misses=near_misses,
-                submit=submit,
+                submit=effective_submit,
                 monitor_seconds=monitor_seconds,
                 poll_interval=poll_interval,
                 cancel_if_open=cancel_if_open,
@@ -112,3 +124,15 @@ def run_daemon(
             level="INFO",
         )
     return results
+
+
+def _resolve_submit_enabled(tracker: TradeTracker, *, default_submit: bool) -> bool:
+    setting = tracker.get_runtime_setting(SUBMIT_ENABLED_SETTING_KEY)
+    if setting is None:
+        return default_submit
+    value = str(setting["setting_value"]).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default_submit

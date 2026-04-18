@@ -166,6 +166,17 @@ CREATE TABLE IF NOT EXISTS telegram_router_state (
   last_error          TEXT
 );
 
+CREATE TABLE IF NOT EXISTS runtime_settings (
+  setting_key         TEXT PRIMARY KEY,
+  setting_value       TEXT NOT NULL,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by          TEXT,
+  source_chat_id      TEXT,
+  source_message_id   INTEGER,
+  last_command        TEXT,
+  notes               TEXT
+);
+
 CREATE TABLE IF NOT EXISTS candidate_snapshots (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -211,6 +222,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_strategy_name ON positions(strategy_nam
 CREATE INDEX IF NOT EXISTS idx_positions_market ON positions(market_id);
 CREATE INDEX IF NOT EXISTS idx_profile_controls_scope ON profile_controls(scope);
 CREATE INDEX IF NOT EXISTS idx_profile_controls_profile_name ON profile_controls(profile_name);
+CREATE INDEX IF NOT EXISTS idx_runtime_settings_key ON runtime_settings(setting_key);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_timestamp ON candidate_snapshots(timestamp);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_category ON candidate_snapshots(category);
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_cluster_key ON candidate_snapshots(cluster_key);

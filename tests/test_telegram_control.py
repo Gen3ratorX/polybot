@@ -31,6 +31,7 @@ def test_parse_command_supports_profile_and_global_commands() -> None:
     assert parse_command(_message("/status")) == ("status", None)
     assert parse_command(_message("/pause late_market_edge")) == ("pause", "late_market_edge")
     assert parse_command(_message("/help")) == ("help", None)
+    assert parse_command(_message("/go_live")) == ("go_live", None)
     assert parse_command(_message("hello")) == (None, None)
 
 
@@ -64,8 +65,15 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
         profile_name="late_market_edge",
         message=_message("/run_once late_market_edge"),
     )
+    go_live_result = await router.route_command(
+        client,
+        command="go_live",
+        profile_name=None,
+        message=_message("/go_live"),
+    )
 
     profile_control_before_stop = tracker.get_control_state("late_market_edge")
+    submit_enabled = tracker.get_runtime_setting("submit_enabled")
 
     global_stop_result = await router.route_command(
         client,
@@ -80,10 +88,13 @@ async def test_router_updates_profile_and_global_controls(tmp_path) -> None:
     assert pause_result.handled is True
     assert help_result.handled is True
     assert run_once_result.handled is True
+    assert go_live_result.handled is True
     assert profile_control is not None
     assert profile_control_before_stop is not None
     assert profile_control_before_stop.desired_state == "PAUSED"
     assert profile_control_before_stop.run_once_pending == 1
+    assert submit_enabled is not None
+    assert submit_enabled["setting_value"] == "true"
 
     assert global_stop_result.handled is True
     assert global_control is not None

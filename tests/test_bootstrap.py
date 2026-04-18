@@ -155,7 +155,16 @@ def test_schema_creates_expected_tables() -> None:
         )
     }
 
-    assert {"trades", "state", "corrections", "positions", "orders", "spot_ticks", "candidate_snapshots"} <= tables
+    assert {
+        "trades",
+        "state",
+        "corrections",
+        "positions",
+        "orders",
+        "spot_ticks",
+        "candidate_snapshots",
+        "runtime_settings",
+    } <= tables
 
 
 def test_schema_includes_profile_columns() -> None:
