@@ -294,18 +294,18 @@ profiles:
       catalyst_lookahead_days: 5
       gamma_tag_slugs:
         - crypto
-      gamma_max_pages: 10
+      gamma_max_pages: 20
       spot_symbols:
         - XBTUSD
         - ETHUSD
         - SOLUSD
       spot_symbol: XBTUSD
-      spot_min_abs_return_1h_pct: 0.0005
-      spot_min_abs_return_15m_pct: 0.0002
-      spot_min_contract_lag_pct: 0.0
+      spot_min_abs_return_1h_pct: null
+      spot_min_abs_return_15m_pct: null
+      spot_min_contract_lag_pct: null
       spot_max_age_seconds: 180
-      momentum_min_abs_volume_change_1h_pct: 1.0
-      momentum_min_abs_one_hour_price_change: 0.0005
+      momentum_min_abs_volume_change_1h_pct: null
+      momentum_min_abs_one_hour_price_change: null
       momentum_price_center: 0.5
       momentum_price_width: 0.30
     exit_rules:

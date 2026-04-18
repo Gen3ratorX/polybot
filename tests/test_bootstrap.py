@@ -111,11 +111,12 @@ def test_runtime_config_loads_hourly_momentum_multi_asset_stress_profile() -> No
     assert config.strategy.max_price == 0.7
     assert config.strategy.min_volume == 100.0
     assert config.strategy.max_hours_to_close == 24.0
-    assert config.strategy.spot_min_abs_return_1h_pct == 0.0005
-    assert config.strategy.spot_min_abs_return_15m_pct == 0.0002
-    assert config.strategy.spot_min_contract_lag_pct == 0.0
-    assert config.strategy.momentum_min_abs_volume_change_1h_pct == 1.0
-    assert config.strategy.momentum_min_abs_one_hour_price_change == 0.0005
+    assert config.strategy.gamma_max_pages == 20
+    assert config.strategy.spot_min_abs_return_1h_pct is None
+    assert config.strategy.spot_min_abs_return_15m_pct is None
+    assert config.strategy.spot_min_contract_lag_pct is None
+    assert config.strategy.momentum_min_abs_volume_change_1h_pct is None
+    assert config.strategy.momentum_min_abs_one_hour_price_change is None
     assert config.strategy.trade_quota_target_trades == 50
     assert config.strategy.trade_quota_stop_after_trades is True
 
