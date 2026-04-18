@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,7 +11,7 @@ from bot.ranker import EdgeRanker
 from bot.risk import RiskManager
 from bot.tracker import TradeTracker
 from models import Market
-from scripts.paper_trade import _paper_runtime, _paper_strategy_name
+from scripts.paper_trade import _paper_runtime, _paper_settlement_delay_minutes, _paper_strategy_name
 
 
 class StubScanner:
@@ -186,6 +187,64 @@ async def test_paper_trading_engine_skips_blocked_market_ids(tmp_path) -> None:
     assert first.trade is not None
     assert second.trade is None
     assert tracker.trade_count(strategy_name="late_market_edge") == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_engine_delays_settlement_for_momentum_profiles(tmp_path) -> None:
+    runtime = load_runtime_config("config.yaml", strategy_section="hourly_momentum_multi_asset")
+    tracker = TradeTracker(f"sqlite:///{tmp_path / 'paper-delay.db'}")
+    tracker.initialize()
+    scanner = StubScanner(
+        Market(
+            market_id="delay-market",
+            condition_id="cond-delay-market",
+            question="Delay market question",
+            end_date=datetime(2026, 4, 6, 15, 0, tzinfo=UTC),
+            yes_token_id="yes-delay",
+            no_token_id="no-delay",
+            yes_price=0.90,
+            no_price=0.10,
+            volume=5_000,
+            category="crypto",
+            volume_change_1h_pct=18.0,
+            one_hour_price_change=0.02,
+        )
+    )
+    engine = PaperTradingEngine(
+        scanner=scanner,
+        ranker=EdgeRanker(runtime.strategy),
+        tracker=tracker,
+        risk_manager=RiskManager(),
+        initial_bankroll=20.0,
+        trade_size_usd=1.0,
+        strategy_name="hourly_momentum_multi_asset",
+        resolver=lambda ranked_market: 1.0,
+        execution_simulator=PaperExecutionSimulator(mode=PaperFillMode.FULL_FILL),
+        settlement_delay_minutes=1,
+    )
+
+    first = await engine.run_cycle(
+        as_of=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+        market_universe=[scanner.market],
+    )
+    second_market = replace(scanner.market, yes_price=0.95, no_price=0.05)
+    second = await engine.run_cycle(
+        as_of=datetime(2026, 4, 6, 12, 1, tzinfo=UTC),
+        market_universe=[second_market],
+        blocked_market_ids={scanner.market.market_id},
+    )
+
+    latest_state = tracker.get_latest_state(strategy_name="hourly_momentum_multi_asset")
+
+    assert _paper_settlement_delay_minutes(runtime) == 10
+    assert first.trade is None
+    assert second.trade is not None
+    assert tracker.trade_count(strategy_name="hourly_momentum_multi_asset") == 1
+    assert tracker.open_position_count(strategy_name="hourly_momentum_multi_asset") == 0
+    assert latest_state is not None
+    assert latest_state.open_positions == 0
+    assert latest_state.total_trades == 1
+    assert latest_state.bankroll > 20.0
 
 
 def test_paper_runtime_relaxes_hourly_momentum_profile() -> None:

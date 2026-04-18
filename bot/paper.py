@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from uuid import uuid4
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from bot.ranker import EdgeRanker, RankedMarket
@@ -11,7 +12,7 @@ from bot.risk import KillSignal, RiskManager
 from api.catalyst import CatalystSnapshot
 from api.spot import SpotSnapshot
 from bot.tracker import TradeTracker
-from models import BotState, Trade
+from models import BotState, Market, OutcomeSide, Position, PositionStatus, Trade
 
 
 class ScannerProtocol(Protocol):
@@ -86,6 +87,15 @@ class PaperExecutionSimulator:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _PaperOpenPosition:
+    position: Position
+    entry_market: Market
+    opened_at: datetime
+    close_after: datetime
+    order_id: str
+
+
 class PaperTradingEngine:
     def __init__(
         self,
@@ -99,11 +109,14 @@ class PaperTradingEngine:
         strategy_name: str | None = None,
         resolver: ResolverProtocol | None = None,
         execution_simulator: PaperExecutionSimulator | None = None,
+        settlement_delay_minutes: int = 0,
     ) -> None:
         if initial_bankroll <= 0:
             raise ValueError("initial_bankroll must be positive")
         if trade_size_usd <= 0:
             raise ValueError("trade_size_usd must be positive")
+        if settlement_delay_minutes < 0:
+            raise ValueError("settlement_delay_minutes must be non-negative")
 
         start = datetime.now(UTC)
         self.scanner = scanner
@@ -114,6 +127,8 @@ class PaperTradingEngine:
         self.strategy_name = strategy_name
         self.resolver = resolver or default_resolver
         self.execution_simulator = execution_simulator or PaperExecutionSimulator()
+        self.settlement_delay_minutes = settlement_delay_minutes
+        self._open_positions: dict[str, _PaperOpenPosition] = {}
         self.state = BotState(
             timestamp=start,
             bankroll=initial_bankroll,
@@ -130,6 +145,7 @@ class PaperTradingEngine:
         spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None = None,
         catalyst_snapshot: CatalystSnapshot | None = None,
         blocked_market_ids: set[str] | None = None,
+        market_universe: Sequence[Market] | Mapping[str, Market] | None = None,
     ) -> PaperTradeCycleResult:
         timestamp = as_of or datetime.now(UTC)
         current_state = replace(self.state, timestamp=timestamp)
@@ -151,22 +167,56 @@ class PaperTradingEngine:
             self.state = paused_state
             return PaperTradeCycleResult(trade=None, kill_signal=kill_signal, state=paused_state)
 
-        try:
-            candidates = await self.scanner.scan(
+        market_lookup = _normalize_market_universe(market_universe) if market_universe is not None else {}
+        if market_universe is not None:
+            candidates = _filter_market_universe(
+                self.scanner,
+                list(market_lookup.values()),
                 as_of=timestamp,
                 spot_snapshot=spot_snapshot,
                 catalyst_snapshot=catalyst_snapshot,
             )
-        except TypeError as exc:
-            if "spot_snapshot" not in str(exc) and "catalyst_snapshot" not in str(exc):
-                raise
-            candidates = await self.scanner.scan(as_of=timestamp)
+        else:
+            try:
+                candidates = await self.scanner.scan(
+                    as_of=timestamp,
+                    spot_snapshot=spot_snapshot,
+                    catalyst_snapshot=catalyst_snapshot,
+                )
+            except TypeError as exc:
+                if "spot_snapshot" not in str(exc) and "catalyst_snapshot" not in str(exc):
+                    raise
+                candidates = await self.scanner.scan(as_of=timestamp)
+            market_lookup = {market.market_id: market for market in candidates}
+
+        if not market_lookup:
+            market_lookup = {market.market_id: market for market in candidates}
+
+        settled_trade, settled_bankroll_delta = self._settle_due_positions(
+            timestamp=timestamp,
+            market_lookup=market_lookup,
+        )
+        if settled_trade is not None:
+            current_state = replace(
+                current_state,
+                bankroll=round(current_state.bankroll + settled_bankroll_delta, 6),
+                daily_pnl=round(current_state.daily_pnl + (settled_trade.pnl or 0.0), 6),
+                weekly_pnl=round(current_state.weekly_pnl + (settled_trade.pnl or 0.0), 6),
+                total_trades=current_state.total_trades + 1,
+                recent_trades=(*current_state.recent_trades, settled_trade),
+                open_positions=self.tracker.open_position_count(self.strategy_name),
+            )
+            self.tracker.record_trade(settled_trade)
+            self.tracker.record_state(current_state)
+
         ranked = self.ranker.rank_markets(candidates, as_of=timestamp)
-        if blocked_market_ids:
-            ranked = [item for item in ranked if item.market.market_id not in blocked_market_ids]
+        blocked_ids = set(blocked_market_ids or ())
+        blocked_ids.update(self._open_positions.keys())
+        if blocked_ids:
+            ranked = [item for item in ranked if item.market.market_id not in blocked_ids]
         if not ranked:
             self.state = current_state
-            return PaperTradeCycleResult(trade=None, kill_signal=None, state=current_state)
+            return PaperTradeCycleResult(trade=settled_trade, kill_signal=None, state=current_state)
 
         selected = ranked[0]
         position_size = min(self.trade_size_usd, current_state.bankroll)
@@ -191,43 +241,63 @@ class PaperTradingEngine:
             },
         )
 
-        resolved_trade = None
-        bankroll_delta = 0.0
-        updated_trades = current_state.recent_trades
+        resolved_trade = settled_trade
+        bankroll_delta = settled_bankroll_delta
+        updated_trades = current_state.recent_trades if settled_trade is None else (*current_state.recent_trades, settled_trade)
         if execution.filled_size_usdc > 0:
-            trade = Trade(
+            open_position = Position(
                 timestamp=timestamp,
                 market_id=selected.market.market_id,
                 market_question=selected.market.question,
                 category=selected.market.category,
                 side=selected.selected_side,
-                entry_price=selected.selected_price,
-                position_size=execution.filled_size_usdc,
-                score=selected.score,
-                hours_to_close=selected.hours_to_close,
-                paper_trade=True,
-                order_id=order_id,
-                strategy_name=self.strategy_name,
-                screened_price=selected.selected_price,
                 fill_price=selected.selected_price,
+                shares=round(execution.filled_size_usdc / selected.selected_price, 6),
+                cost_basis=execution.filled_size_usdc,
+                order_id=order_id,
+                status=PositionStatus.OPEN,
+                paper_trade=True,
+                strategy_name=self.strategy_name,
             )
-            resolved_trade = trade.settle(
-                resolution_price=self.resolver(selected),
-                settled_at=timestamp,
-            )
-            bankroll_delta = resolved_trade.pnl or 0.0
-            updated_trades = (*current_state.recent_trades, resolved_trade)
-            self.tracker.record_trade(resolved_trade)
+            self.tracker.upsert_position(open_position)
+            if self.settlement_delay_minutes <= 0:
+                settled_trade, closed_position = _paper_trade_from_position(
+                    position=open_position,
+                    entry_market=selected.market,
+                    exit_market=selected.market,
+                    exit_price=self.resolver(selected),
+                    timestamp=timestamp,
+                    score=selected.score,
+                    hours_to_close=selected.hours_to_close,
+                    strategy_name=self.strategy_name,
+                )
+                self.tracker.upsert_position(closed_position, notes="paper immediate settlement")
+                self.tracker.record_trade(settled_trade)
+                resolved_trade = settled_trade
+                bankroll_delta = round(bankroll_delta + (settled_trade.pnl or 0.0), 6)
+                updated_trades = (*updated_trades, settled_trade)
+            else:
+                self._open_positions[selected.market.market_id] = _PaperOpenPosition(
+                    position=open_position,
+                    entry_market=selected.market,
+                    opened_at=timestamp,
+                    close_after=timestamp + timedelta(minutes=self.settlement_delay_minutes),
+                    order_id=order_id,
+                )
+                bankroll_delta = round(bankroll_delta - execution.filled_size_usdc, 6)
 
         open_orders = self.tracker.open_order_count(self.strategy_name)
+        open_positions = self.tracker.open_position_count(self.strategy_name)
+        realized_pnl = settled_trade.pnl if settled_trade is not None else 0.0
         updated_state = replace(
             current_state,
             bankroll=round(current_state.bankroll + bankroll_delta, 6),
-            daily_pnl=round(current_state.daily_pnl + bankroll_delta, 6),
-            weekly_pnl=round(current_state.weekly_pnl + bankroll_delta, 6),
-            total_trades=current_state.total_trades + (1 if resolved_trade is not None else 0),
+            daily_pnl=round(current_state.daily_pnl + realized_pnl, 6),
+            weekly_pnl=round(current_state.weekly_pnl + realized_pnl, 6),
+            total_trades=current_state.total_trades + (1 if settled_trade is not None else 0),
             recent_trades=updated_trades,
             open_orders=open_orders,
+            open_positions=open_positions,
             is_paused=False,
             pause_level=None,
             pause_reason=None,
@@ -237,10 +307,46 @@ class PaperTradingEngine:
         self.tracker.record_state(updated_state)
         self.state = updated_state
         return PaperTradeCycleResult(
-            trade=resolved_trade,
+            trade=settled_trade,
             kill_signal=None,
             state=updated_state,
         )
+
+    def _settle_due_positions(
+        self,
+        *,
+        timestamp: datetime,
+        market_lookup: dict[str, Market],
+    ) -> tuple[Trade | None, float]:
+        if self.settlement_delay_minutes <= 0 or not self._open_positions:
+            return None, 0.0
+        due_market_id = next(
+            (
+                market_id
+                for market_id, open_position in self._open_positions.items()
+                if timestamp >= open_position.close_after
+            ),
+            None,
+        )
+        if due_market_id is None:
+            return None, 0.0
+        open_position = self._open_positions[due_market_id]
+        exit_market = market_lookup.get(due_market_id, open_position.entry_market)
+        exit_price = _market_exit_price(exit_market, open_position.position.side)
+        settled_trade, closed_position = _paper_trade_from_position(
+            position=open_position.position,
+            entry_market=open_position.entry_market,
+            exit_market=exit_market,
+            exit_price=exit_price,
+            timestamp=timestamp,
+            score=None,
+            hours_to_close=None,
+            strategy_name=self.strategy_name,
+        )
+        self.tracker.upsert_position(closed_position, notes=f"paper_close_order_id={open_position.order_id}")
+        del self._open_positions[due_market_id]
+        bankroll_delta = closed_position.shares * exit_price
+        return settled_trade, bankroll_delta
 
     async def run(
         self,
@@ -263,6 +369,69 @@ class PaperTradingEngine:
 
 def default_resolver(ranked_market: RankedMarket) -> float:
     return 1.0 if ranked_market.selected_price >= 0.5 else 0.0
+
+
+def _normalize_market_universe(
+    market_universe: Sequence[Market] | Mapping[str, Market],
+) -> dict[str, Market]:
+    if isinstance(market_universe, Mapping):
+        return {str(key): value for key, value in market_universe.items()}
+    return {market.market_id: market for market in market_universe}
+
+
+def _filter_market_universe(
+    scanner: object,
+    markets: list[Market],
+    *,
+    as_of: datetime,
+    spot_snapshot: SpotSnapshot | dict[str, SpotSnapshot] | None,
+    catalyst_snapshot: CatalystSnapshot | None,
+) -> list[Market]:
+    filter_markets = getattr(scanner, "filter_markets", None)
+    if callable(filter_markets):
+        return filter_markets(
+            markets,
+            as_of=as_of,
+            spot_snapshot=spot_snapshot,
+            catalyst_snapshot=catalyst_snapshot,
+        )
+    return markets
+
+
+def _market_exit_price(market: Market, side: OutcomeSide) -> float:
+    return market.yes_price if side is OutcomeSide.YES else market.no_price
+
+
+def _paper_trade_from_position(
+    *,
+    position: Position,
+    entry_market: Market,
+    exit_market: Market,
+    exit_price: float,
+    timestamp: datetime,
+    score: float | None,
+    hours_to_close: float | None,
+    strategy_name: str | None,
+) -> tuple[Trade, Position]:
+    closed_position = position.settle(resolution_price=exit_price, resolved_at=timestamp)
+    trade = Trade(
+        timestamp=position.timestamp,
+        market_id=position.market_id,
+        market_question=position.market_question,
+        category=position.category,
+        side=position.side,
+        entry_price=position.fill_price,
+        position_size=position.cost_basis,
+        score=score,
+        hours_to_close=hours_to_close,
+        paper_trade=True,
+        order_id=position.order_id,
+        strategy_name=strategy_name,
+        screened_price=position.fill_price,
+        fill_price=position.fill_price,
+        resolution_price=exit_price,
+    ).settle(resolution_price=exit_price, settled_at=timestamp)
+    return trade, closed_position
 
 
 def _paper_order_id(market_id: str, timestamp: datetime) -> str:

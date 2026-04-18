@@ -63,11 +63,13 @@ async def main() -> None:
             initial_bankroll=20.0,
             trade_size_usd=_paper_trade_size(paper_runtime, args.trade_size_usd),
             strategy_name=paper_runtime.strategy.name,
+            settlement_delay_minutes=_paper_settlement_delay_minutes(paper_runtime),
         )
         current = datetime.now(UTC)
         state = engine.state
         seen_market_ids: set[str] = set()
         for _ in range(args.cycles):
+            market_universe = await scanner.load_markets()
             spot_snapshot = await _load_cycle_spot_snapshot(env=env, runtime=paper_runtime, tracker=tracker)
             catalyst_snapshot = await load_active_catalyst_snapshot(env=env, runtime=paper_runtime, tracker=tracker)
             result = await engine.run_cycle(
@@ -75,6 +77,7 @@ async def main() -> None:
                 spot_snapshot=spot_snapshot,
                 catalyst_snapshot=catalyst_snapshot,
                 blocked_market_ids=seen_market_ids,
+                market_universe=market_universe,
             )
             state = result.state
             if result.trade is not None:
@@ -100,6 +103,12 @@ def _paper_trade_size(runtime, override: float | None) -> float:
 
 def _paper_strategy_name(runtime) -> str:
     return runtime.strategy.name
+
+
+def _paper_settlement_delay_minutes(runtime) -> int:
+    if runtime.strategy.signal_mode == "momentum":
+        return min(10, max(1, runtime.strategy.exit_rules.max_hold_minutes_without_progress))
+    return 0
 
 
 def _paper_runtime(runtime):
