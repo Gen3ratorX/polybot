@@ -454,6 +454,19 @@ def _resolve_strategy_block(raw: dict[str, Any], strategy_section: str) -> dict[
     raise KeyError(f"Strategy profile not found: {strategy_section}")
 
 
+def load_profile_names(config_path: str | Path = "config.yaml") -> tuple[str, ...]:
+    path = Path(config_path)
+    raw = yaml.safe_load(path.read_text()) or {}
+    profiles = raw.get("profiles")
+    if isinstance(profiles, dict) and profiles:
+        return tuple(str(name) for name in profiles.keys())
+    return tuple(
+        str(name)
+        for name, value in raw.items()
+        if isinstance(value, dict) and name not in {"execution", "risk", "autocorrect", "ai_scoring", "notifications", "sizing"}
+    )
+
+
 def _load_strategy(data: dict[str, Any], name: str) -> StrategyProfile:
     if "filter_bounds" in data:
         return StrategyProfile(

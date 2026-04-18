@@ -11,10 +11,16 @@ from bot.tracker import TradeTracker
 from models import BotState
 
 
-def create_web_app(*, env: EnvironmentConfig, tracker: TradeTracker) -> web.Application:
+def create_web_app(
+    *,
+    env: EnvironmentConfig,
+    tracker: TradeTracker,
+    configured_profiles: tuple[str, ...] | None = None,
+) -> web.Application:
     app = web.Application(middlewares=[_auth_middleware])
     app["env"] = env
     app["tracker"] = tracker
+    app["configured_profiles"] = configured_profiles or ()
 
     app.add_routes(
         [
@@ -63,20 +69,24 @@ async def _handle_health(request: web.Request) -> web.Response:
 
 async def _handle_status_api(request: web.Request) -> web.Response:
     tracker: TradeTracker = request.app["tracker"]
-    payload = _build_status_payload(tracker)
+    payload = _build_status_payload(tracker, configured_profiles=request.app.get("configured_profiles", ()))
     return web.json_response(payload)
 
 
 async def _handle_index(request: web.Request) -> web.Response:
     tracker: TradeTracker = request.app["tracker"]
-    payload = _build_status_payload(tracker)
+    payload = _build_status_payload(tracker, configured_profiles=request.app.get("configured_profiles", ()))
     html = _render_dashboard_html(payload)
     return web.Response(text=html, content_type="text/html")
 
 
-def _build_status_payload(tracker: TradeTracker) -> dict[str, Any]:
-    profiles = tracker.profile_performance_report()
-    profile_performance = tracker.profile_performance_report()
+def _build_status_payload(
+    tracker: TradeTracker,
+    *,
+    configured_profiles: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    profiles = tracker.profile_performance_report(configured_profiles=configured_profiles)
+    profile_performance = tracker.profile_performance_report(configured_profiles=configured_profiles)
     recent_trades = tracker.list_recent_trades(limit=20)
     open_positions = tracker.list_open_positions(limit=20)
     open_orders = tracker.list_open_orders(limit=20)
@@ -88,6 +98,7 @@ def _build_status_payload(tracker: TradeTracker) -> dict[str, Any]:
         accent="#7aa7ff",
     )
     return {
+        "configured_profiles": list(configured_profiles or ()),
         "profiles": [_serialize_profile_status(tracker, item) for item in profiles],
         "profile_performance": profile_performance,
         "recent_trades": [_serialize_trade(trade) for trade in recent_trades],
@@ -115,6 +126,7 @@ def _serialize_profile_status(tracker: TradeTracker, profile: dict[str, Any]) ->
 
 
 def _render_dashboard_html(payload: dict[str, Any]) -> str:
+    configured_profiles = payload.get("configured_profiles") or []
     profiles = payload["profiles"]
     performance = payload["profile_performance"]
     recent_trades = payload["recent_trades"]
@@ -147,7 +159,8 @@ def _render_dashboard_html(payload: dict[str, Any]) -> str:
         "</div>",
         "</div>",
         "<div class='topbar-meta'>",
-        f"<div class='topbar-item'><span>Profiles</span><strong>{len(profiles)}</strong></div>",
+        f"<div class='topbar-item'><span>Configured profiles</span><strong>{len(configured_profiles) or len(profiles)}</strong></div>",
+        f"<div class='topbar-item'><span>Ledger profiles</span><strong>{len(profiles)}</strong></div>",
         f"<div class='topbar-item'><span>Trades</span><strong>{sum(item['trade_count'] for item in performance)}</strong></div>",
         f"<div class='topbar-item'><span>Open positions</span><strong>{sum(item['open_positions'] for item in performance)}</strong></div>",
         "</div>",

@@ -38,13 +38,21 @@ def test_web_app_status_payload_and_control(tmp_path) -> None:
         )
     )
 
-    payload = _build_status_payload(tracker)
-    assert payload["profiles"]
+    payload = _build_status_payload(
+        tracker,
+        configured_profiles=("late_market_edge", "btc_up_down", "hourly_momentum_multi_asset"),
+    )
+    assert len(payload["profiles"]) == 3
     assert payload["latest_state"] is not None
     assert payload["latest_state"]["bankroll"] == 10.0
     assert "svg" in payload["global_curve_svg"]
     assert any(profile["equity_curve_svg"] is not None for profile in payload["profiles"])
     assert all("form" not in str(item) for item in payload["profiles"])
+    assert payload["configured_profiles"] == [
+        "late_market_edge",
+        "btc_up_down",
+        "hourly_momentum_multi_asset",
+    ]
 
 
 def test_web_app_basic_auth_parser() -> None:

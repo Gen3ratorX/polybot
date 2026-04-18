@@ -1012,7 +1012,11 @@ class TradeTracker:
             "trade_summary_by_category": trade_summary,
         }
 
-    def profile_performance_report(self) -> list[dict[str, object]]:
+    def profile_performance_report(
+        self,
+        *,
+        configured_profiles: tuple[str, ...] | None = None,
+    ) -> list[dict[str, object]]:
         with self.connection() as conn:
             state_rows = conn.execute(
                 """
@@ -1105,6 +1109,23 @@ class TradeTracker:
                 }
             )
         known = {row["strategy_name"] for row in report}
+        if configured_profiles:
+            known_strategies = {str(name) for name in configured_profiles if str(name).strip()}
+            for strategy in sorted((strategies | known_strategies) - known):
+                report.append(
+                    {
+                        "strategy_name": strategy,
+                        "trade_count": 0,
+                        "wins": 0,
+                        "losses": 0,
+                        "unresolved": 0,
+                        "open_orders": open_orders_by_strategy.get(strategy, 0),
+                        "open_positions": open_positions_by_strategy.get(strategy, 0),
+                        "win_rate": None,
+                        "total_pnl": 0.0,
+                    }
+                )
+            return sorted(report, key=lambda row: row["strategy_name"])
         for strategy in sorted(strategies - known):
             report.append(
                 {
